@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { HttpAgent, type Message, type RunAgentInput } from "@ag-ui/client";
 import { EventSchemas } from "@ag-ui/core/schemas";
+import {
+  anonymizePii,
+  deanonymizePii,
+  type PiiTokenMap,
+} from "@openbot/shared/pii/anonymizer";
 import type { BuiltInAgentClassicConfig } from "@copilotkit/runtime/v2";
 import { PLAN_RUN_COMPLETED } from "@openbot/toolkit/copilotkit/agents";
 import type { Subscription } from "rxjs";
@@ -158,6 +163,94 @@ export function planMessages(prompt: Options["prompt"]): Message[] {
   return messages;
 }
 
+/** Mask every textual prompt field while leaving image bytes and protocol ids untouched. */
+export function anonymizePlanMessages(messages: Message[]): {
+  messages: Message[];
+  tokenMap: PiiTokenMap;
+} {
+  const tokenMap: PiiTokenMap = {};
+  const tokenForValue = new Map<string, string>();
+  const nextByType = new Map<string, number>();
+  const mask = (text: string) => {
+    const local = anonymizePii(text);
+    let masked = local.anonymizedText;
+    for (const [localToken, original] of Object.entries(local.tokenMap)) {
+      const type = localToken.match(/^<PII_([A-Z_]+)_\d+>$/)?.[1];
+      if (!type) continue;
+      const valueKey = `${type}\0${original}`;
+      let token = tokenForValue.get(valueKey);
+      if (!token) {
+        const index = (nextByType.get(type) ?? 0) + 1;
+        nextByType.set(type, index);
+        token = `<PII_${type}_${index}>`;
+        tokenForValue.set(valueKey, token);
+        tokenMap[token] = original;
+      }
+      masked = masked.replaceAll(localToken, token);
+    }
+    return masked;
+  };
+  const copied = messages.map((message) => {
+    const row = message as Message & {
+      content?: unknown;
+      toolCalls?: Array<{
+        function?: { arguments?: unknown };
+        [key: string]: unknown;
+      }>;
+    };
+    let content = row.content;
+    if (typeof content === "string") content = mask(content);
+    else if (Array.isArray(content)) {
+      content = content.map((part) => {
+        if (
+          part &&
+          typeof part === "object" &&
+          "text" in part &&
+          typeof part.text === "string"
+        )
+          return { ...part, text: mask(part.text) };
+        return part;
+      });
+    }
+    const toolCalls = row.toolCalls?.map((call) => {
+      const args = call.function?.arguments;
+      return typeof args === "string"
+        ? {
+            ...call,
+            function: { ...call.function, arguments: mask(args) },
+          }
+        : call;
+    });
+    return {
+      ...message,
+      ...(content !== undefined ? { content } : {}),
+      ...(toolCalls ? { toolCalls } : {}),
+    } as Message;
+  });
+  return { messages: copied, tokenMap };
+}
+
+function createTextRestorer(tokenMap: PiiTokenMap) {
+  const pending = new Map<string, string>();
+  return (messageId: string, delta: string, flush = false) => {
+    const combined = (pending.get(messageId) ?? "") + delta;
+    let held = 0;
+    if (!flush) {
+      for (const token of Object.keys(tokenMap)) {
+        for (let size = 1; size < token.length; size++) {
+          if (combined.endsWith(token.slice(0, size)))
+            held = Math.max(held, size);
+        }
+      }
+    }
+    const ready = combined.slice(0, combined.length - held);
+    const tail = combined.slice(combined.length - held);
+    if (tail) pending.set(messageId, tail);
+    else pending.delete(messageId);
+    return deanonymizePii(ready, tokenMap);
+  };
+}
+
 /** Model transport only. BuiltInAgent still validates and executes every server tool. */
 export class PlanModel implements PlanLanguageModel {
   readonly specificationVersion = "v3";
@@ -252,7 +345,10 @@ export class PlanModel implements PlanLanguageModel {
   async doStream(options: Options): Promise<StreamResult> {
     this.streaming = true;
     this.pendingTools = [];
-    const messages = planMessages(options.prompt);
+    const { messages, tokenMap } = anonymizePlanMessages(
+      planMessages(options.prompt),
+    );
+    const restoreText = createTextRestorer(tokenMap);
     const tools = (options.tools ?? []).map((tool) => {
       if (tool.type !== "function")
         throw new Error(
@@ -343,13 +439,26 @@ export class PlanModel implements PlanLanguageModel {
                     });
                     break;
                   case "TEXT_MESSAGE_CONTENT":
-                    controller.enqueue({
-                      type: "text-delta",
-                      id: event.messageId,
-                      delta: event.delta,
-                    });
+                    {
+                      const delta = restoreText(event.messageId, event.delta);
+                      if (delta)
+                        controller.enqueue({
+                          type: "text-delta",
+                          id: event.messageId,
+                          delta,
+                        });
+                    }
                     break;
                   case "TEXT_MESSAGE_END":
+                    {
+                      const delta = restoreText(event.messageId, "", true);
+                      if (delta)
+                        controller.enqueue({
+                          type: "text-delta",
+                          id: event.messageId,
+                          delta,
+                        });
+                    }
                     controller.enqueue({
                       type: "text-end",
                       id: event.messageId,
@@ -376,11 +485,6 @@ export class PlanModel implements PlanLanguageModel {
                     if (!call || call.ended)
                       throw new Error("Unexpected plan tool arguments.");
                     call.args += event.delta;
-                    controller.enqueue({
-                      type: "tool-input-delta",
-                      id: event.toolCallId,
-                      delta: event.delta,
-                    });
                     break;
                   }
                   case "TOOL_CALL_END": {
@@ -388,6 +492,13 @@ export class PlanModel implements PlanLanguageModel {
                     if (!call || call.ended)
                       throw new Error("Unexpected plan tool completion.");
                     call.ended = true;
+                    const restoredArgs = deanonymizePii(call.args, tokenMap);
+                    if (restoredArgs)
+                      controller.enqueue({
+                        type: "tool-input-delta",
+                        id: event.toolCallId,
+                        delta: restoredArgs,
+                      });
                     controller.enqueue({
                       type: "tool-input-end",
                       id: event.toolCallId,
@@ -396,7 +507,7 @@ export class PlanModel implements PlanLanguageModel {
                       type: "tool-call",
                       toolCallId: event.toolCallId,
                       toolName: call.name,
-                      input: call.args,
+                      input: restoredArgs,
                     });
                     break;
                   }

@@ -44,17 +44,17 @@ function PasswordsPage() {
           <p className="text-destructive text-sm" role="alert">
             Couldn't load your passwords. Reload the page.
           </p>
-        ) : !logins.data.passwordManager ? (
+        ) : !logins.data?.passwordManager ? (
           <PageEmpty icon={IconLockOff} title="Saved passwords are off">
             An admin turned them off. Your logins are kept but won't be offered.
           </PageEmpty>
-        ) : logins.data.logins.length === 0 ? (
+        ) : (logins.data?.logins?.length ?? 0) === 0 ? (
           <PageEmpty icon={IconKey} title="No saved logins yet">
             Choose Save to Passwords when you sign a Bot in to a website.
           </PageEmpty>
         ) : (
           <PageRows>
-            {logins.data.logins.map((login, index) => (
+            {(logins.data?.logins ?? []).map((login, index) => (
               <div key={login.id}>
                 {index > 0 ? <Separator /> : null}
                 <Item size="sm">

@@ -42,7 +42,10 @@ export function createVoiceRoutes(
         },
         503,
       );
-    return context.json({ transport: provider.transport });
+    return context.json({
+      transport: provider.transport,
+      privacy: provider.privacy,
+    });
   });
   app.post(
     "/calls",

@@ -1,11 +1,12 @@
+use lazy_static::lazy_static;
+use regex::Regex;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
+use std::net::Ipv6Addr;
 use std::os::raw::{c_char, c_float, c_int, c_void};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
-use regex::Regex;
-use lazy_static::lazy_static;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,9 +124,11 @@ lazy_static! {
     static ref RE_EMAIL: Regex = Regex::new(r"(?i)\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap();
     static ref RE_PHONE: Regex = Regex::new(r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap();
     static ref RE_SSN: Regex = Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap();
-    static ref RE_CREDIT_CARD: Regex = Regex::new(r"\b(?:\d{4}[-\s]?){3}\d{4}\b").unwrap();
-    static ref RE_API_KEY: Regex = Regex::new(r"(?i)\b(?:api[_-]?key|secret|token|bearer|password)[=:\s]+[A-Za-z0-9_\-]{8,}\b").unwrap();
-    
+    static ref RE_CREDIT_CARD: Regex = Regex::new(r"\b\d(?:[ -]?\d){12,18}\b").unwrap();
+    static ref RE_IPV4: Regex = Regex::new(r"\b(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\b").unwrap();
+    static ref RE_IPV6_CANDIDATE: Regex = Regex::new(r"(?i)(?:[0-9a-f]*:)+[0-9a-f]*").unwrap();
+    static ref RE_API_KEY: Regex = Regex::new(r"(?i)\b(?:sk-[a-z0-9_-]{20,}|ghp_[a-z0-9]{20,}|AIza[a-z0-9_-]{35}|(?:api[_-]?key|secret|token|bearer|password)[=:\s]+[A-Za-z0-9_\-]{8,})\b").unwrap();
+
     static ref KV_MANAGER: GlobalKvManager = GlobalKvManager::new(512); // Default 512 MB
     static ref LOCAL_MEMORY: GlobalMemoryStore = GlobalMemoryStore::new();
 }
@@ -239,11 +242,36 @@ pub fn sanitize_pii_string(input: &str, mode: PiiMaskMode) -> (String, usize) {
     let mut detected = 0usize;
     let mut text = input.to_string();
 
-    let email_replacement = if mode == PiiMaskMode::PiiMaskAll { "[PII_EMAIL]" } else { "[EMAIL_REDACTED]" };
-    let phone_replacement = if mode == PiiMaskMode::PiiMaskAll { "[PII_PHONE]" } else { "[PHONE_REDACTED]" };
-    let ssn_replacement = if mode == PiiMaskMode::PiiMaskAll { "[PII_SSN]" } else { "[SSN_REDACTED]" };
-    let cc_replacement = if mode == PiiMaskMode::PiiMaskAll { "[PII_CARD]" } else { "[CARD_REDACTED]" };
-    let api_replacement = if mode == PiiMaskMode::PiiMaskAll { "[PII_SECRET]" } else { "[SECRET_REDACTED]" };
+    let email_replacement = if mode == PiiMaskMode::PiiMaskAll {
+        "[PII_EMAIL]"
+    } else {
+        "[EMAIL_REDACTED]"
+    };
+    let phone_replacement = if mode == PiiMaskMode::PiiMaskAll {
+        "[PII_PHONE]"
+    } else {
+        "[PHONE_REDACTED]"
+    };
+    let ssn_replacement = if mode == PiiMaskMode::PiiMaskAll {
+        "[PII_SSN]"
+    } else {
+        "[SSN_REDACTED]"
+    };
+    let cc_replacement = if mode == PiiMaskMode::PiiMaskAll {
+        "[PII_CARD]"
+    } else {
+        "[CARD_REDACTED]"
+    };
+    let api_replacement = if mode == PiiMaskMode::PiiMaskAll {
+        "[PII_SECRET]"
+    } else {
+        "[SECRET_REDACTED]"
+    };
+    let ip_replacement = if mode == PiiMaskMode::PiiMaskAll {
+        "[PII_IP]"
+    } else {
+        "[IP_REDACTED]"
+    };
 
     let count_e = RE_EMAIL.find_iter(&text).count();
     if count_e > 0 {
@@ -263,11 +291,49 @@ pub fn sanitize_pii_string(input: &str, mode: PiiMaskMode) -> (String, usize) {
         text = RE_SSN.replace_all(&text, ssn_replacement).into_owned();
     }
 
-    let count_c = RE_CREDIT_CARD.find_iter(&text).count();
-    if count_c > 0 {
-        detected += count_c;
-        text = RE_CREDIT_CARD.replace_all(&text, cc_replacement).into_owned();
+    let mut count_c = 0usize;
+    text = RE_CREDIT_CARD
+        .replace_all(&text, |captures: &regex::Captures| {
+            let candidate = captures.get(0).map_or("", |value| value.as_str());
+            if supported_card_number(candidate) {
+                count_c += 1;
+                cc_replacement.to_string()
+            } else {
+                candidate.to_string()
+            }
+        })
+        .into_owned();
+    detected += count_c;
+
+    let ipv6_source = text.clone();
+    let mut count_ip = 0usize;
+    text = RE_IPV6_CANDIDATE
+        .replace_all(&text, |captures: &regex::Captures| {
+            let found = match captures.get(0) {
+                Some(found) => found,
+                None => return String::new(),
+            };
+            let before = ipv6_source[..found.start()].chars().next_back();
+            let after = ipv6_source[found.end()..].chars().next();
+            let has_token_boundary = |character: Option<char>| {
+                !character.is_some_and(|value| value.is_ascii_alphanumeric() || value == ':')
+            };
+            if has_token_boundary(before)
+                && has_token_boundary(after)
+                && found.as_str().parse::<Ipv6Addr>().is_ok()
+            {
+                count_ip += 1;
+                ip_replacement.to_string()
+            } else {
+                found.as_str().to_string()
+            }
+        })
+        .into_owned();
+    let count_v4 = RE_IPV4.find_iter(&text).count();
+    if count_v4 > 0 {
+        text = RE_IPV4.replace_all(&text, ip_replacement).into_owned();
     }
+    detected += count_ip + count_v4;
 
     let count_a = RE_API_KEY.find_iter(&text).count();
     if count_a > 0 {
@@ -278,8 +344,84 @@ pub fn sanitize_pii_string(input: &str, mode: PiiMaskMode) -> (String, usize) {
     (text, detected)
 }
 
+fn supported_card_number(value: &str) -> bool {
+    let digits: Vec<u8> = value
+        .bytes()
+        .filter(|byte| byte.is_ascii_digit())
+        .map(|byte| byte - b'0')
+        .collect();
+    let supported = match digits.as_slice() {
+        [4, ..] if digits.len() == 13 || digits.len() == 16 || digits.len() == 19 => true,
+        [5, second, ..] if (1..=5).contains(second) && digits.len() == 16 => true,
+        [2, ..] if digits.len() == 16 => {
+            let prefix = u16::from(digits[0]) * 1000
+                + u16::from(digits[1]) * 100
+                + u16::from(digits[2]) * 10
+                + u16::from(digits[3]);
+            (2221..=2720).contains(&prefix)
+        }
+        [3, second, ..] if (*second == 4 || *second == 7) && digits.len() == 15 => true,
+        [6, 0, 1, 1, ..] if digits.len() == 16 => true,
+        [6, 5, ..] if digits.len() == 16 => true,
+        [6, 4, third, ..] if (4..=9).contains(third) && digits.len() == 16 => true,
+        _ => false,
+    };
+    if !supported {
+        return false;
+    }
+
+    let sum: u32 = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(index, digit)| {
+            let value = u32::from(*digit);
+            if index % 2 == 1 {
+                let doubled = value * 2;
+                if doubled > 9 {
+                    doubled - 9
+                } else {
+                    doubled
+                }
+            } else {
+                value
+            }
+        })
+        .sum();
+    sum % 10 == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sanitize_pii_string, PiiMaskMode};
+
+    #[test]
+    fn native_filter_masks_current_credentials_cards_and_ip_addresses() {
+        let input = "Card 4111 1111-1111 1111; host 192.168.1.10 and 2001:db8::1; key sk-proj-12345678901234567890";
+        let (sanitized, count) = sanitize_pii_string(input, PiiMaskMode::PiiMaskAll);
+
+        assert_eq!(count, 4);
+        assert!(!sanitized.contains("4111 1111"));
+        assert!(!sanitized.contains("192.168.1.10"));
+        assert!(!sanitized.contains("2001:db8::1"));
+        assert!(!sanitized.contains("sk-proj-"));
+    }
+
+    #[test]
+    fn native_filter_does_not_mask_invalid_card_or_partial_ipv6() {
+        let input = "Number 1234567890123456 and invalid 2001:db8::zz";
+        let (sanitized, count) = sanitize_pii_string(input, PiiMaskMode::PiiMaskAll);
+
+        assert_eq!(count, 0);
+        assert_eq!(sanitized, input);
+    }
+}
+
 #[no_mangle]
-pub unsafe extern "C" fn meridian_sanitize_pii(input_text: *const c_char, mode: PiiMaskMode) -> *mut PiiGateResult {
+pub unsafe extern "C" fn meridian_sanitize_pii(
+    input_text: *const c_char,
+    mode: PiiMaskMode,
+) -> *mut PiiGateResult {
     let start = Instant::now();
     if input_text.is_null() {
         return std::ptr::null_mut();
@@ -341,8 +483,19 @@ pub fn evaluate_laya_routing_internal(
     }
 
     let agent_keywords = [
-        "check", "run", "browse", "schedule", "execute", "fetch",
-        "calculate", "search", "lookup", "database", "api", "order", "book"
+        "check",
+        "run",
+        "browse",
+        "schedule",
+        "execute",
+        "fetch",
+        "calculate",
+        "search",
+        "lookup",
+        "database",
+        "api",
+        "order",
+        "book",
     ];
 
     let mut found_keywords = 0;
@@ -360,11 +513,20 @@ pub fn evaluate_laya_routing_internal(
     let p_deep = (1.0 - p_direct).clamp(0.01, 0.99);
 
     let (route, reason) = if p_direct >= tau_fast {
-        ("direct_e2b".to_string(), "High confidence conversational turn (Gemma 4 E2B)".to_string())
+        (
+            "direct_e2b".to_string(),
+            "High confidence conversational turn (Gemma 4 E2B)".to_string(),
+        )
     } else if p_deep >= tau_deep || tool_indicators > 0 || ambiguity_level >= 0.5 {
-        ("deep_e4b".to_string(), "Tool usage / reasoning required (Gemma 4 E4B)".to_string())
+        (
+            "deep_e4b".to_string(),
+            "Tool usage / reasoning required (Gemma 4 E4B)".to_string(),
+        )
     } else {
-        ("direct_e2b".to_string(), "Default conversational fallback (Gemma 4 E2B)".to_string())
+        (
+            "direct_e2b".to_string(),
+            "Default conversational fallback (Gemma 4 E2B)".to_string(),
+        )
     };
 
     let y = if route == "direct_e2b" { 1.0 } else { 0.0 };
@@ -466,6 +628,10 @@ pub unsafe extern "C" fn meridian_kv_cache_put(
 
     let k_slice = std::slice::from_raw_parts(key_vector, dim);
     let v_slice = std::slice::from_raw_parts(val_vector, dim);
+    let entry_bytes = match dim.checked_mul(std::mem::size_of::<f32>() * 2) {
+        Some(bytes) if bytes <= KV_MANAGER.max_capacity_bytes => bytes,
+        _ => return -2,
+    };
 
     let entry = KvEntry {
         sequence_id,
@@ -476,6 +642,37 @@ pub unsafe extern "C" fn meridian_kv_cache_put(
     };
 
     if let Ok(mut sessions) = KV_MANAGER.sessions.write() {
+        if let Some(session_cache) = sessions.get_mut(&s_id) {
+            session_cache.entries.remove(&sequence_id);
+        }
+        let mut total_bytes: usize = sessions
+            .values()
+            .flat_map(|session| session.entries.values())
+            .map(|cached| cached.dim * std::mem::size_of::<f32>() * 2)
+            .sum();
+        while total_bytes.saturating_add(entry_bytes) > KV_MANAGER.max_capacity_bytes {
+            let oldest = sessions
+                .iter()
+                .flat_map(|(session_id, session)| {
+                    session.entries.iter().map(move |(seq, cached)| {
+                        (session_id.clone(), *seq, cached.created_at, cached.dim * 8)
+                    })
+                })
+                .min_by_key(|(_, _, created_at, _)| *created_at);
+            let Some((oldest_session, oldest_sequence, _, bytes)) = oldest else {
+                break;
+            };
+            let session_is_empty = if let Some(session) = sessions.get_mut(&oldest_session) {
+                session.entries.remove(&oldest_sequence);
+                session.entries.is_empty()
+            } else {
+                false
+            };
+            if session_is_empty {
+                sessions.remove(&oldest_session);
+            }
+            total_bytes = total_bytes.saturating_sub(bytes);
+        }
         let session_cache = sessions.entry(s_id).or_insert_with(|| KvSessionCache {
             entries: HashMap::new(),
         });
@@ -569,7 +766,7 @@ pub unsafe extern "C" fn meridian_kv_cache_get_stats(out_stats: *mut KvCacheStat
     let hit_rate = if total_reqs > 0 {
         hits as f64 / total_reqs as f64
     } else {
-        1.0
+        0.0
     };
 
     unsafe {
@@ -618,7 +815,9 @@ pub unsafe extern "C" fn meridian_memory_upsert(
 
     if let Ok(mut facts) = LOCAL_MEMORY.facts.write() {
         facts.insert(k, fact);
-        LOCAL_MEMORY.last_sync.store(Instant::now().elapsed().as_nanos() as u64, Ordering::SeqCst);
+        LOCAL_MEMORY
+            .last_sync
+            .store(Instant::now().elapsed().as_nanos() as u64, Ordering::SeqCst);
     }
     0
 }

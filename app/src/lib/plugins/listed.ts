@@ -21,9 +21,9 @@ const isBrokered = (server: PluginServer): boolean =>
  * no query client. See its one clause below.
  */
 export function brokeredAccountsListedOn(
-  servers: PluginServer[],
+  servers: PluginServer[] = [],
 ): PluginServer[] {
-  return servers.filter(
+  return (servers ?? []).filter(
     (server) =>
       isBrokered(server) &&
       server.authScheme !== "NO_AUTH" &&
@@ -39,20 +39,21 @@ export function brokeredAccountsListedOn(
  * listing it offered a person an account they cannot connect, under a sentence about an environment
  * variable only an administrator can set. Without the broker there is nothing for them to decide.
  */
-export function serversListedFor(page: {
-  servers: PluginServer[];
-  composioConfigured: boolean;
+export function serversListedFor(page?: {
+  servers?: PluginServer[];
+  composioConfigured?: boolean;
 }): PluginServer[] {
-  return page.composioConfigured
-    ? page.servers
-    : page.servers.filter((server) => server.provenance !== "composio");
+  const servers = page?.servers ?? [];
+  return page?.composioConfigured
+    ? servers
+    : servers.filter((server) => server.provenance !== "composio");
 }
 
 /** Apps whose account is the organisation's, shown so a person knows a Bot does not act as them there. */
 export function sharedAccountsListedOn(
-  servers: PluginServer[],
+  servers: PluginServer[] = [],
 ): PluginServer[] {
-  return servers.filter(
+  return (servers ?? []).filter(
     (server) => isBrokered(server) && server.accountMode === "shared",
   );
 }

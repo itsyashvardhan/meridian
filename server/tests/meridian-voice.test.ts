@@ -23,17 +23,21 @@ test("voiceConfig accepts openflow-realtime with gemma models and laya configura
   expect(config?.voice).toBe("gemma-native");
   expect(config?.layaEndpoint).toBe("http://127.0.0.1:8088");
   expect(config?.tauFast).toBe(0.85);
-  expect(config?.tauDeep).toBe(0.60);
+  expect(config?.tauDeep).toBe(0.6);
 });
 
 test("MeridianEngine PII gate sanitizes sensitive entities accurately with sub-millisecond steady-state latency", () => {
-  const rawText = "User email is john.doe@example.com and phone is +1-555-019-2834 with secret sk-live-998877665544";
-  
+  const rawText =
+    "User email is john.doe@example.com and phone is +1-555-019-2834 with secret sk-live-998877665544";
+
   // Warmup run
   MeridianEngine.filterPii(rawText, PiiMaskMode.PII_MASK_ALL);
 
   const t0 = performance.now();
-  const sanitizedResult = MeridianEngine.filterPii(rawText, PiiMaskMode.PII_MASK_ALL);
+  const sanitizedResult = MeridianEngine.filterPii(
+    rawText,
+    PiiMaskMode.PII_MASK_ALL,
+  );
   const latencyMs = performance.now() - t0;
 
   expect(sanitizedResult.hadPii).toBe(true);
@@ -44,8 +48,22 @@ test("MeridianEngine PII gate sanitizes sensitive entities accurately with sub-m
   expect(latencyMs).toBeLessThan(1.0);
 });
 
+test("MeridianEngine masks formatted cards, IPv4 and IPv6 addresses, and project API keys", () => {
+  const input =
+    "Card 4111 1111-1111 1111, hosts 192.168.1.10 and 2001:db8::1, key sk-proj-12345678901234567890";
+  const result = MeridianEngine.filterPii(input, PiiMaskMode.PII_MASK_ALL);
+
+  expect(result.hadPii).toBe(true);
+  expect(result.piiEntitiesDetected).toBeGreaterThanOrEqual(4);
+  expect(result.sanitizedText).not.toContain("4111 1111");
+  expect(result.sanitizedText).not.toContain("192.168.1.10");
+  expect(result.sanitizedText).not.toContain("2001:db8::1");
+  expect(result.sanitizedText).not.toContain("sk-proj-");
+});
+
 test("MeridianEngine scoreLayaRouting executes with sub-millisecond latency", () => {
-  const transcript = "Please execute database lookup and calculate the monthly financial ledger balance via API";
+  const transcript =
+    "Please execute database lookup and calculate the monthly financial ledger balance via API";
   const t0 = performance.now();
   const decision = MeridianEngine.scoreLayaRouting(transcript, {
     tauFast: 0.88,
@@ -67,13 +85,14 @@ test("LayaRouter routes conversational queries to Gemma 4 E2B fast edge path", a
 
   expect(decision.route).toBe("direct_e2b");
   expect(decision.targetModel).toBe("gemma4-e2b");
-  expect(decision.confidence).toBeGreaterThanOrEqual(0.70);
+  expect(decision.confidence).toBeGreaterThanOrEqual(0.7);
 });
 
 test("LayaRouter routes complex tool execution to Gemma 4 E4B deep path", async () => {
   const router = new LayaRouter();
   const decision = await router.classify({
-    partialTranscript: "Please execute database lookup and calculate the monthly financial ledger balance via API",
+    partialTranscript:
+      "Please execute database lookup and calculate the monthly financial ledger balance via API",
     toolIndicators: 2,
     ambiguityLevel: 0.7,
     tauFast: 0.88,
@@ -100,11 +119,12 @@ test("MeridianAudioRouter handles direct audio ingest, model stream demux, and t
   expect(session.selectedModel).toBe("gemma4-e4b");
 
   // Ingest direct PCM audio frame (audio-first, no transcription)
-  const dummyPcm = Buffer.from(new Uint8Array(960).fill(128)).toString("base64");
+  const dummyPcm = Buffer.from(new Uint8Array(960).fill(128)).toString(
+    "base64",
+  );
   const audioEvents = await session.pushAudioChunk(dummyPcm);
-  expect(audioEvents.length).toBe(1);
-  expect(audioEvents[0].type).toBe("thought_chunk");
-  expect(audioEvents[0].delta).toContain("Direct Audio Frame: 960 bytes received");
+  expect(audioEvents).toEqual([]);
+  expect(session.audioFrameCount).toBe(1);
 
   // Demux streaming model output with thoughts, tool calls, and final text
   const rawModelStream = [
@@ -113,18 +133,23 @@ test("MeridianAudioRouter handles direct audio ingest, model stream demux, and t
     "Results retrieved for **customer**.",
   ];
 
-  const streamEvents = rawModelStream.flatMap((chunk) => session.processModelStreamChunk(chunk));
-  const flushed = await session.endStream();
-  const allEvents = [...streamEvents, ...flushed];
+  const streamEvents = rawModelStream.flatMap((chunk) =>
+    session.processModelStreamChunk(chunk),
+  );
+  const allEvents = streamEvents;
 
   const thoughts = allEvents.filter((e) => e.type === "thought_chunk");
   const toolCalls = allEvents.filter((e) => e.type === "tool_call_chunk");
   const outputs = allEvents.filter((e) => e.type === "output_chunk");
 
-  expect(thoughts.some((t) => t.delta.includes("Analyzing spoken request"))).toBe(true);
+  expect(
+    thoughts.some((t) => t.delta.includes("Analyzing spoken request")),
+  ).toBe(true);
   expect(toolCalls.length).toBeGreaterThanOrEqual(1);
   expect(toolCalls[0].tool).toBe("query_database");
-  expect(outputs.some((o) => o.delta.includes("Results retrieved for"))).toBe(true);
+  expect(outputs.some((o) => o.delta.includes("Results retrieved for"))).toBe(
+    true,
+  );
 
   // Dispatch tool call through session with sub-millisecond PII sanitization
   const dispatchRes = (await session.dispatchToolCall("query_database", {
@@ -135,6 +160,26 @@ test("MeridianAudioRouter handles direct audio ingest, model stream demux, and t
   expect(dispatchRes.status).toBe("executed");
   expect(dispatchRes.hadPii).toBe(true);
   expect(dispatchRes.sanitizedArgs.ssn).toBe("[PII_SSN]");
+
+  const flushed = await session.endStream();
+  expect(flushed.at(-1)?.type).toBe("done");
+  await expect(session.pushAudioChunk(dummyPcm)).rejects.toThrow(
+    "Audio session has ended.",
+  );
+});
+
+test("MeridianAudioRouter rejects malformed and oversized PCM chunks before ingest", async () => {
+  const session = await new MeridianAudioRouter().createSession();
+
+  await expect(session.pushAudioChunk("not-base64")).rejects.toThrow(
+    "valid base64 PCM",
+  );
+  await expect(
+    session.pushAudioChunk(Buffer.from([1, 2, 3]).toString("base64")),
+  ).rejects.toThrow("16-bit PCM");
+  await expect(
+    session.pushAudioChunk(Buffer.alloc(256 * 1024 + 2).toString("base64")),
+  ).rejects.toThrow("at most 256 KiB");
 });
 
 test("openflow-realtime provider initiates WebRTC connection with duplex dispatch metadata", async () => {
@@ -168,7 +213,11 @@ test("openflow-realtime provider initiates WebRTC connection with duplex dispatc
   expect(connection.transport).toBe("webrtc");
   expect((connection as any).provider).toBe("openflow-realtime");
   expect((connection as any).activeRunner).toBe("gemma4-e2b");
-  expect((connection as any).piiFilterActive).toBe(true);
+  expect((connection as any).piiFilterActive).toBe(false);
+  expect(provider.privacy).toEqual({
+    audioDestination: "OpenAI",
+    audioPiiFiltered: false,
+  });
 
   expect(capturedHeaders["x-meridian-engine"]).toBe("laya-rlcd");
   expect(capturedBody.edge_model).toBe("gemma4-e2b");

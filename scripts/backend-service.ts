@@ -112,8 +112,86 @@ const server = Bun.serve({
       return new Response(JSON.stringify({ transport: "webrtc", provider: "openflow-realtime" }), { headers });
     }
 
+    if (url.pathname === "/api/plugins/giveable") {
+      return new Response(JSON.stringify({ apps: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/plugins/connections") {
+      return new Response(JSON.stringify({ connections: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/plugins") {
+      return new Response(
+        JSON.stringify({
+          catalogue: [],
+          servers: [],
+          skills: [],
+          botsMayCallBack: false,
+          redirectUri: null,
+          composioConfigured: false,
+        }),
+        { headers }
+      );
+    }
+
+    if (url.pathname === "/api/identity/links") {
+      return new Response(JSON.stringify({ links: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/identity/providers") {
+      return new Response(JSON.stringify({ providers: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/recorder/connections") {
+      return new Response(JSON.stringify({ connections: [], extensionIds: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/delivery") {
+      return new Response(
+        JSON.stringify({
+          bindings: [],
+          devices: [],
+          deliveries: [],
+          available: { slack: false, teams: false, sms: false, push: false },
+        }),
+        { headers }
+      );
+    }
+
     if (url.pathname === "/api/channels") {
       return new Response(JSON.stringify({ channels: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/passwords") {
+      return new Response(JSON.stringify({ passwordManager: true, logins: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/components") {
+      return new Response(JSON.stringify({ components: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/audit" || url.pathname === "/api/admin/audit") {
+      return new Response(JSON.stringify({ events: [], rows: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/enterprise/model-usage") {
+      return new Response(JSON.stringify({ summary: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/enterprise/actions") {
+      return new Response(JSON.stringify([]), { headers });
+    }
+
+    if (url.pathname === "/api/computers") {
+      return new Response(JSON.stringify({ computers: [] }), { headers });
+    }
+
+    if (url.pathname.startsWith("/api/computers/") && url.pathname.endsWith("/control")) {
+      return new Response(JSON.stringify({ active: false, status: "idle" }), { headers });
+    }
+
+    if (url.pathname === "/api/skills" || url.pathname === "/api/admin/skills") {
+      return new Response(JSON.stringify({ skills: [] }), { headers });
     }
 
     if (url.pathname === "/api/agents" || url.pathname === "/api/bots") {

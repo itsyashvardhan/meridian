@@ -18,6 +18,10 @@ export type VoiceConnection =
 
 export interface VoiceProvider {
   readonly transport: VoiceConnection["transport"];
+  readonly privacy: {
+    audioDestination: "OpenAI" | "xAI" | "configured realtime endpoint";
+    audioPiiFiltered: false;
+  };
   connect(input: {
     sdp?: string;
     agentName: string;
@@ -130,6 +134,7 @@ function createXaiVoiceProvider(
 ): VoiceProvider {
   return {
     transport: "websocket",
+    privacy: { audioDestination: "xAI", audioPiiFiltered: false },
     async connect({
       agentName,
       agentTitle,
@@ -211,6 +216,12 @@ function createOpenflowRealtimeProvider(
 
   return {
     transport: "webrtc",
+    privacy: {
+      audioDestination: config.apiKey.startsWith("http")
+        ? "configured realtime endpoint"
+        : "OpenAI",
+      audioPiiFiltered: false,
+    },
     async connect({
       sdp,
       agentName,
@@ -273,10 +284,9 @@ function createOpenflowRealtimeProvider(
         }),
       );
 
-      const endpoint =
-        config.apiKey.startsWith("http")
-          ? config.apiKey
-          : "https://api.openai.com/v1/realtime/calls";
+      const endpoint = config.apiKey.startsWith("http")
+        ? config.apiKey
+        : "https://api.openai.com/v1/realtime/calls";
 
       try {
         const response = await transport(endpoint, {
@@ -300,7 +310,7 @@ function createOpenflowRealtimeProvider(
           sdp: answer,
           provider: "openflow-realtime",
           activeRunner: selectedModel as "gemma4-e2b" | "gemma4-e4b",
-          piiFilterActive: true,
+          piiFilterActive: false,
         };
       } catch (error) {
         if (error instanceof VoiceError) throw error;
@@ -324,6 +334,7 @@ export function createVoiceProvider(
   }
   return {
     transport: "webrtc",
+    privacy: { audioDestination: "OpenAI", audioPiiFiltered: false },
     async connect({
       sdp,
       agentName,

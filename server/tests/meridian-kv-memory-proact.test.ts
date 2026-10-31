@@ -15,16 +15,21 @@ test("MeridianEngine KV Cache stores, retrieves, and evicts prefix sequences", (
   expect(fetched).not.toBeNull();
   expect(fetched?.key[0]).toBeCloseTo(1.23, 2);
   expect(fetched?.val[0]).toBeCloseTo(4.56, 2);
+  expect(MeridianEngine.getKvCache(sessionId, 99, dim)).toBeNull();
 
   // Evict prefix
   MeridianEngine.putKvCache(sessionId, 2, key, val);
   MeridianEngine.putKvCache(sessionId, 3, key, val);
   const evictOk = MeridianEngine.evictKvPrefix(sessionId, 1);
   expect(evictOk).toBe(true);
+  expect(MeridianEngine.evictKvPrefix(sessionId, -1)).toBe(false);
 
   const stats = MeridianEngine.getKvCacheStats();
   expect(stats.totalEntries).toBeGreaterThanOrEqual(1);
   expect(stats.maxCapacityBytes).toBeGreaterThan(0);
+  expect(stats.currentUsageBytes).toBeLessThanOrEqual(stats.maxCapacityBytes);
+  expect(stats.hitRate).toBeGreaterThan(0);
+  expect(stats.hitRate).toBeLessThan(1);
 });
 
 test("MeridianEngine Local Memory upserts and retrieves facts", () => {
@@ -55,12 +60,12 @@ test("MeridianAudioRouter operates direct audio ingest with reasoning output, to
   // Push raw audio chunk (bypassing STT)
   const pcmChunkBase64 = Buffer.from(new Uint8Array(1024)).toString("base64");
   const audioEvents = await session.pushAudioChunk(pcmChunkBase64);
-  expect(audioEvents.length).toBeGreaterThan(0);
-  expect(audioEvents[0].type).toBe("thought_chunk");
+  expect(audioEvents).toEqual([]);
+  expect(session.audioFrameCount).toBe(1);
 
   // Stream model reasoning and action
   const streamEvents = session.processModelStreamChunk(
-    "<thought>Analyzing user voice frame for action</thought>Let's schedule a deployment review meeting."
+    "<thought>Analyzing user voice frame for action</thought>Let's schedule a deployment review meeting.",
   );
   expect(streamEvents.some((e) => e.type === "thought_chunk")).toBe(true);
   expect(streamEvents.some((e) => e.type === "output_chunk")).toBe(true);

@@ -72,6 +72,7 @@ test("authentication, CSRF header, membership, and active single-agent channel p
   let calls = 0;
   const provider: VoiceProvider = {
     transport: "webrtc",
+    privacy: { audioDestination: "OpenAI", audioPiiFiltered: false },
     connect: async () => {
       calls++;
       return connection;
@@ -152,6 +153,7 @@ test("transport configuration is authenticated and Grok connects without an SDP 
   };
   const provider: VoiceProvider = {
     transport: "websocket",
+    privacy: { audioDestination: "xAI", audioPiiFiltered: false },
     connect: async (input) => {
       expect(input.sdp).toBeUndefined();
       expect(input.agentName).toBe(profile.name);
@@ -179,7 +181,10 @@ test("transport configuration is authenticated and Grok connects without an SDP 
   const app = createVoiceRoutes(user, provider, channels);
   const configResponse = await app.request("/config");
   expect(configResponse.headers.get("cache-control")).toBe("no-store");
-  expect(await configResponse.json()).toEqual({ transport: "websocket" });
+  expect(await configResponse.json()).toEqual({
+    transport: "websocket",
+    privacy: { audioDestination: "xAI", audioPiiFiltered: false },
+  });
   expect(calls).toBe(0);
   const result = await app.request(
     "/calls",
@@ -228,6 +233,7 @@ test("rejects malformed, non-SDP, and oversized request bodies before provider a
   let calls = 0;
   const provider: VoiceProvider = {
     transport: "webrtc",
+    privacy: { audioDestination: "OpenAI", audioPiiFiltered: false },
     connect: async () => {
       calls++;
       return connection;
@@ -332,6 +338,7 @@ test("voice identity comes from the authorized profile and unavailable profiles 
   let calls = 0;
   const provider: VoiceProvider = {
     transport: "webrtc",
+    privacy: { audioDestination: "OpenAI", audioPiiFiltered: false },
     connect: async (input) => {
       calls++;
       expect(input).toMatchObject({

@@ -38,6 +38,14 @@ import {
 import { newId } from "@/lib/new-id";
 import { cn } from "@/lib/utils";
 import { Button } from "../../ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../../ui/dialog";
 import { AttachmentStrip } from "./attachment-strip";
 import {
   attachmentsConfigFor,
@@ -1337,6 +1345,50 @@ export function Composer({
   const sendLabel = parking ? "Queue message" : "Send message";
   const callAction =
     draft.isEmpty && draft.attachments.length === 0 ? voiceCall : undefined;
+  const [voicePrivacyOpen, setVoicePrivacyOpen] = useState(false);
+  const startVoiceCall = () => {
+    if (!callAction) return;
+    if (callAction.active) {
+      callAction.onStart();
+      return;
+    }
+    setVoicePrivacyOpen(true);
+  };
+  const voicePrivacyNotice = callAction ? (
+    <Dialog open={voicePrivacyOpen} onOpenChange={setVoicePrivacyOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Voice call privacy</DialogTitle>
+          <DialogDescription>
+            Your microphone audio goes from this browser directly to the
+            configured real-time provider. Meridian cannot inspect or mask it
+            before the provider processes it. Voice transcripts may be saved
+            with this conversation. Meridian masks transcript details before
+            sending a voice summary to the chat model, but live audio is not
+            PII-filtered.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            onClick={() => setVoicePrivacyOpen(false)}
+            size="sm"
+            variant="outline"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              setVoicePrivacyOpen(false);
+              callAction.onStart();
+            }}
+            size="sm"
+          >
+            Start voice call
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  ) : null;
   const actionClassName = cn(
     "rounded-full p-0",
     compact ? "size-8 self-end" : "size-7",
@@ -1365,7 +1417,7 @@ export function Composer({
       }
       className={actionClassName}
       disabled={disabled || dictation.busy || !callAction.supported}
-      onClick={callAction.onStart}
+      onClick={startVoiceCall}
       size="icon"
       type="button"
     >
@@ -1575,6 +1627,7 @@ export function Composer({
             </div>
           </DictationSurface>
         </form>
+        {voicePrivacyNotice}
       </div>
     );
   }
@@ -1656,6 +1709,7 @@ export function Composer({
           </div>
         </DictationSurface>
       </form>
+      {voicePrivacyNotice}
     </div>
   );
 }

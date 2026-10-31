@@ -649,7 +649,7 @@ function ModelUsage() {
         Couldn't load model usage. Reload the page.
       </p>
     );
-  if (usage.data.summary.length === 0)
+  if ((usage.data?.summary?.length ?? 0) === 0)
     return (
       <PageEmpty icon={IconChartBar} title="No recent runs">
         No Bot runs in the last 30 days.
@@ -657,7 +657,7 @@ function ModelUsage() {
     );
   return (
     <PageRows>
-      {usage.data.summary.map((row, index) => (
+      {(usage.data?.summary ?? []).map((row, index) => (
         <div key={`${row.model}-${row.source}`}>
           {index > 0 ? <Separator /> : null}
           <Item size="sm">
@@ -694,11 +694,11 @@ function RecordedActions() {
         Couldn't load recorded actions. Reload the page.
       </p>
     );
-  if (actions.data.length === 0)
+  if ((actions.data?.length ?? 0) === 0)
     return <PageEmpty icon={IconTerminal2} title="No commands recorded yet" />;
   return (
     <PageRows>
-      {actions.data.map((action, index) => (
+      {(actions.data ?? []).map((action, index) => (
         <div key={action.id}>
           {index > 0 ? <Separator /> : null}
           <Item size="sm">

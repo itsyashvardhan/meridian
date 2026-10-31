@@ -67,6 +67,28 @@ test("voice summary uses the chat credential and treats transcript as quoted dat
   expect(calls).toBe(1);
 });
 
+test("voice summary masks transcript PII before model ingress and restores it on egress", async () => {
+  const summarize = createVoiceSummarizer({
+    model: { provider: "openai", defaultModel: "chat-model" },
+    resolveApiKey: async () => "chat-key",
+    fetchImpl: async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const prompt = body.messages[1].content as string;
+      expect(prompt).toContain("<PII_EMAIL_1>");
+      expect(prompt).not.toContain("jane@example.com");
+      return Response.json({
+        choices: [{ message: { content: "Follow up with <PII_EMAIL_1>." } }],
+      });
+    },
+  });
+
+  expect(
+    await summarize([
+      { id: "turn-sensitive", role: "user", text: "Email jane@example.com" },
+    ]),
+  ).toBe("Follow up with jane@example.com.");
+});
+
 test("missing keys and provider failures cannot appear as successful summaries", async () => {
   await expect(
     createVoiceSummarizer({

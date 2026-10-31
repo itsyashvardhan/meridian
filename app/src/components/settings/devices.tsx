@@ -42,14 +42,14 @@ export function NativeDevices() {
           {error.message}
         </p>
       ) : null}
-      {reach.isPending || !reach.data ? null : reach.data.devices.length ===
+      {reach.isPending || !reach.data ? null : (reach.data.devices?.length ?? 0) ===
         0 ? (
         <PageEmpty icon={IconDevices} title="No devices yet">
           Phones and computers you sign in on show up here.
         </PageEmpty>
       ) : (
         <PageRows>
-          {reach.data.devices.map((device, index) => (
+          {(reach.data.devices ?? []).map((device, index) => (
             <Fragment key={device.id}>
               {index > 0 ? <Separator /> : null}
               <Item size="sm">
@@ -88,14 +88,14 @@ export function RecentDeliveries() {
           {reach.error.message}
         </p>
       ) : null}
-      {reach.isPending || !reach.data ? null : reach.data.deliveries.length ===
+      {reach.isPending || !reach.data ? null : (reach.data.deliveries?.length ?? 0) ===
         0 ? (
         <PageEmpty icon={IconSend} title="No deliveries yet">
           Notifications sent to your devices show up here.
         </PageEmpty>
       ) : (
         <PageRows>
-          {reach.data.deliveries.map((delivery, index) => (
+          {(reach.data.deliveries ?? []).map((delivery, index) => (
             <Fragment key={delivery.id}>
               {index > 0 ? <Separator /> : null}
               <Item size="sm">

@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { parse } from "yaml";
 
 const SERVER_PORT = Number(process.env.SERVER_PORT || 3001);
 
@@ -10,6 +13,92 @@ const devUser = {
   image: null,
   onboarding: null,
 };
+
+function loadPrebuiltBots() {
+  const bots: any[] = [
+    {
+      id: "general-assistant",
+      name: "General Assistant",
+      title: "Everyday Work",
+      roleDescription: "Help with everyday work using clear, concise, and accurate answers.",
+      avatarSeed: "general-assistant",
+      visibility: "public",
+      endpoint: null,
+      builtIn: true,
+      hasAuth: false,
+      hasCallbackToken: true,
+      hidden: false,
+      pinned: true,
+      assignedToMe: false,
+      systemOwned: true,
+      canManage: true,
+      mine: false,
+      isolated: false,
+      isolationActive: false,
+      isolationOffReason: null,
+    },
+    {
+      id: "knowledge",
+      name: "Knowledge",
+      title: "Company Knowledge",
+      roleDescription: "Help answer company knowledge questions and cite sources when available.",
+      avatarSeed: "knowledge",
+      visibility: "public",
+      endpoint: null,
+      builtIn: true,
+      hasAuth: false,
+      hasCallbackToken: true,
+      hidden: false,
+      pinned: true,
+      assignedToMe: false,
+      systemOwned: true,
+      canManage: true,
+      mine: false,
+      isolated: false,
+      isolationActive: false,
+      isolationOffReason: null,
+    },
+  ];
+
+  try {
+    const catalogDir = path.resolve(process.cwd(), "examples/fintech/catalog");
+    if (fs.existsSync(catalogDir)) {
+      const files = fs.readdirSync(catalogDir).filter((f) => f.endsWith(".yaml"));
+      for (const file of files) {
+        const doc = parse(fs.readFileSync(path.join(catalogDir, file), "utf8"));
+        if (doc && doc.id && !bots.some((b) => b.id === doc.id)) {
+          bots.push({
+            id: doc.id,
+            name: doc.name || doc.id,
+            title: doc.title || "",
+            roleDescription: doc.role_description || "",
+            avatarSeed: doc.avatar_seed || doc.id,
+            visibility: "public",
+            endpoint: null,
+            builtIn: true,
+            hasAuth: false,
+            hasCallbackToken: true,
+            hidden: false,
+            pinned: false,
+            assignedToMe: false,
+            systemOwned: true,
+            canManage: true,
+            mine: false,
+            isolated: false,
+            isolationActive: false,
+            isolationOffReason: null,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Failed loading catalog prebuilt bots:", err);
+  }
+
+  return bots;
+}
+
+const prebuiltBots = loadPrebuiltBots();
 
 const server = Bun.serve({
   port: SERVER_PORT,
@@ -114,12 +203,115 @@ const server = Bun.serve({
       return new Response(JSON.stringify({ transport: "webrtc", provider: "openflow-realtime" }), { headers });
     }
 
+    if (url.pathname === "/api/plugins/giveable") {
+      return new Response(JSON.stringify({ apps: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/plugins/connections") {
+      return new Response(JSON.stringify({ connections: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/plugins") {
+      return new Response(
+        JSON.stringify({
+          catalogue: [],
+          servers: [],
+          skills: [],
+          botsMayCallBack: false,
+          redirectUri: null,
+          composioConfigured: false,
+        }),
+        { headers }
+      );
+    }
+
+    if (url.pathname === "/api/identity/links") {
+      return new Response(JSON.stringify({ links: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/identity/providers") {
+      return new Response(JSON.stringify({ providers: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/recorder/connections") {
+      return new Response(JSON.stringify({ connections: [], extensionIds: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/delivery") {
+      return new Response(
+        JSON.stringify({
+          bindings: [],
+          devices: [],
+          deliveries: [],
+          available: { slack: false, teams: false, sms: false, push: false },
+        }),
+        { headers }
+      );
+    }
+
     if (url.pathname === "/api/channels") {
       return new Response(JSON.stringify({ channels: [] }), { headers });
     }
 
+    if (url.pathname === "/api/passwords") {
+      return new Response(JSON.stringify({ passwordManager: true, logins: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/components") {
+      return new Response(JSON.stringify({ components: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/audit" || url.pathname === "/api/admin/audit") {
+      return new Response(JSON.stringify({ events: [], rows: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/enterprise/model-usage") {
+      return new Response(JSON.stringify({ summary: [] }), { headers });
+    }
+
+    if (url.pathname === "/api/enterprise/actions") {
+      return new Response(JSON.stringify([]), { headers });
+    }
+
+    if (url.pathname === "/api/computers") {
+      return new Response(JSON.stringify({ computers: [] }), { headers });
+    }
+
+    if (url.pathname.startsWith("/api/computers/") && url.pathname.endsWith("/control")) {
+      return new Response(JSON.stringify({ active: false, status: "idle" }), { headers });
+    }
+
+    if (url.pathname === "/api/skills" || url.pathname === "/api/admin/skills") {
+      return new Response(JSON.stringify({ skills: [] }), { headers });
+    }
+
     if (url.pathname === "/api/agents" || url.pathname === "/api/bots") {
-      return new Response(JSON.stringify({ agents: [] }), { headers });
+      return new Response(JSON.stringify({ agents: prebuiltBots }), { headers });
+    }
+
+    if (url.pathname.startsWith("/api/agents/") || url.pathname.startsWith("/api/bots/")) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      const agentId = decodeURIComponent(parts[2] || "");
+      const found = prebuiltBots.find((b) => b.id === agentId);
+      if (found) {
+        if (parts[3] === "lifecycle") {
+          return new Response(
+            JSON.stringify({
+              lifecycle: {
+                state: "ready",
+                agentId: found.id,
+                hasActiveConversation: false,
+                lastSeenAt: new Date().toISOString(),
+              },
+            }),
+            { headers }
+          );
+        }
+        if (parts[3] === "activity") {
+          return new Response(JSON.stringify({ activity: [] }), { headers });
+        }
+        return new Response(JSON.stringify({ agent: found }), { headers });
+      }
     }
 
     if (url.pathname.startsWith("/api/")) {

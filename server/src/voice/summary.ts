@@ -1,4 +1,5 @@
 import type { VoiceTranscriptEntry } from "@openbot/shared/voice-session";
+import { anonymizePii, deanonymizePii } from "@openbot/shared/pii/anonymizer";
 import { PlanModel } from "../agents/plan-model";
 import type { TitlerOptions } from "../channels/titler";
 import type { RuntimeModel } from "../copilot";
@@ -29,6 +30,9 @@ export function createVoiceSummarizer(
     const content = JSON.stringify(
       transcript.map(({ role, text }) => ({ role, text })),
     );
+    // Voice transcripts can contain details the user spoke aloud. Keep the reversible map in
+    // this request only: providers see placeholders and restored text stays on the server.
+    const { anonymizedText, tokenMap } = anonymizePii(content);
     if (options.model.plan) {
       // Reuse the authenticated owned-harness transport, with no tools or shared conversation state.
       const controller = new AbortController();
@@ -50,15 +54,18 @@ export function createVoiceSummarizer(
         const result = await model.doGenerate({
           prompt: [
             { role: "system", content: INSTRUCTION },
-            { role: "user", content: [{ type: "text", text: content }] },
+            { role: "user", content: [{ type: "text", text: anonymizedText }] },
           ],
           maxOutputTokens: 768,
           abortSignal,
         });
-        return validatedSummary(
-          result.content
-            .flatMap((part) => (part.type === "text" ? [part.text] : []))
-            .join(""),
+        return deanonymizePii(
+          validatedSummary(
+            result.content
+              .flatMap((part) => (part.type === "text" ? [part.text] : []))
+              .join(""),
+          ),
+          tokenMap,
         );
       } finally {
         clearTimeout(timer);
@@ -87,13 +94,13 @@ export function createVoiceSummarizer(
           ...(anthropic
             ? {
                 system: INSTRUCTION,
-                messages: [{ role: "user", content }],
+                messages: [{ role: "user", content: anonymizedText }],
                 max_tokens: 768,
               }
             : {
                 messages: [
                   { role: "system", content: INSTRUCTION },
-                  { role: "user", content },
+                  { role: "user", content: anonymizedText },
                 ],
                 max_completion_tokens: 768,
               }),
@@ -124,6 +131,6 @@ export function createVoiceSummarizer(
             ? body.choices[0]?.message?.content
             : undefined
         : undefined;
-    return validatedSummary(answer);
+    return deanonymizePii(validatedSummary(answer), tokenMap);
   };
 }

@@ -1,5 +1,8 @@
 import { AudioReasoningParser } from "@openbot/shared/pii/audio-reasoning-parser";
-import type { AudioMimeType, MeridianStreamEvent } from "@openbot/shared/pii/audio-stream";
+import type {
+  AudioMimeType,
+  MeridianStreamEvent,
+} from "@openbot/shared/pii/audio-stream";
 import { anonymizePii, type PiiTokenMap } from "@openbot/shared/pii/anonymizer";
 import { MeridianEngine, PiiMaskMode } from "./meridian-engine";
 import { LayaRouter, type LayaClassificationResponse } from "./router";
@@ -30,22 +33,49 @@ export interface AudioIngestSession {
   sessionId: string;
   selectedModel: "gemma4-e2b" | "gemma4-e4b";
   routingDecision?: LayaClassificationResponse;
-  kvTokenSequence: number;
+  audioFrameCount: number;
 
   pushAudioChunk(pcmChunkBase64: string): Promise<MeridianStreamEvent[]>;
   processModelStreamChunk(rawTokenChunk: string): MeridianStreamEvent[];
-  dispatchToolCall(toolName: string, args: Record<string, unknown>): Promise<unknown>;
+  dispatchToolCall(
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown>;
   checkProactiveTriggers(): ProactiveTrigger[];
   endStream(): Promise<MeridianStreamEvent[]>;
+}
+
+const MAX_PCM_CHUNK_BYTES = 256 * 1024;
+
+function decodePcmChunk(pcmChunkBase64: string): Buffer {
+  if (
+    typeof pcmChunkBase64 !== "string" ||
+    pcmChunkBase64.length === 0 ||
+    pcmChunkBase64.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      pcmChunkBase64,
+    )
+  ) {
+    throw new Error("Audio chunk must be valid base64 PCM.");
+  }
+  const chunk = Buffer.from(pcmChunkBase64, "base64");
+  if (
+    chunk.length === 0 ||
+    chunk.length > MAX_PCM_CHUNK_BYTES ||
+    chunk.length % 2 !== 0
+  ) {
+    throw new Error("Audio chunk must contain at most 256 KiB of 16-bit PCM.");
+  }
+  return chunk;
 }
 
 /**
  * Direct Audio Ingest & Multi-Tier Reasoning Orchestrator.
  * Audio-first multimodal pipeline:
  *  - Consumes raw PCM audio chunks without intermediate STT text bottleneck.
- *  - Emits direct structured reasoning / actions (<thought>...</thought> and tool_call_chunk).
- *  - Native KV cache page management across multimodal turns.
- *  - Local memory retention with automated PII tokenization.
+ *  - Accepts bounded raw PCM chunks and tracks bytes received.
+ *  - Parses model stream chunks supplied by an inference adapter.
+ *  - Masks parsed model output and tool arguments before local processing.
  *  - ProAct-based agent engine emitting non-blocking Call-to-Action (CTA) triggers.
  */
 export class MeridianAudioRouter {
@@ -55,17 +85,21 @@ export class MeridianAudioRouter {
     this.layaRouter = new LayaRouter(layaEndpoint);
   }
 
-  async createSession(options: DirectAudioIngestOptions = {}): Promise<AudioIngestSession> {
+  async createSession(
+    options: DirectAudioIngestOptions = {},
+  ): Promise<AudioIngestSession> {
     const sessionId = `meridian-audio-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const parser = new AudioReasoningParser();
     const tokenVault: PiiTokenMap = {};
     let accumulatedPcmBytes = 0;
     let sequenceCounter = 0;
+    let ended = false;
     const proactiveTriggers: ProactiveTrigger[] = [];
 
     const toolCount = options.tools?.length ?? 0;
     const initialRoute = await this.layaRouter.classify({
-      partialTranscript: options.tools && options.tools.length > 0 ? "agent_tool_action" : "",
+      partialTranscript:
+        options.tools && options.tools.length > 0 ? "agent_tool_action" : "",
       toolIndicators: toolCount,
       tauFast: options.tauFast ?? 0.88,
       tauDeep: options.tauDeep ?? 0.65,
@@ -76,40 +110,26 @@ export class MeridianAudioRouter {
         ? (options.model as "gemma4-e2b" | "gemma4-e4b")
         : initialRoute.targetModel;
 
-    // Load any existing user memory facts for this session
-    const existingFact = MeridianEngine.retrieveMemory(`user-intent-${sessionId}`);
-
     return {
       sessionId,
       selectedModel,
       routingDecision: initialRoute,
-      kvTokenSequence: sequenceCounter,
+      get audioFrameCount() {
+        return sequenceCounter;
+      },
 
-      async pushAudioChunk(pcmChunkBase64: string): Promise<MeridianStreamEvent[]> {
-        const buffer = Buffer.from(pcmChunkBase64, "base64");
-        accumulatedPcmBytes += buffer.length;
+      async pushAudioChunk(
+        pcmChunkBase64: string,
+      ): Promise<MeridianStreamEvent[]> {
+        if (ended) throw new Error("Audio session has ended.");
+        accumulatedPcmBytes += decodePcmChunk(pcmChunkBase64).length;
         sequenceCounter++;
-
-        // Cache simulated multimodal key/val projection in low-level KV cache (dim=64)
-        const mockKey = new Float32Array(64).fill(0.01 * (sequenceCounter % 10));
-        const mockVal = new Float32Array(64).fill(0.02 * (sequenceCounter % 10));
-        MeridianEngine.putKvCache(sessionId, sequenceCounter, mockKey, mockVal);
-
-        // Keep KV cache bounded (evict past prefix > 128 frames)
-        if (sequenceCounter > 128) {
-          MeridianEngine.evictKvPrefix(sessionId, 64);
-        }
-
-        return [
-          {
-            type: "thought_chunk",
-            delta: `<thought>Direct Audio Frame: ${buffer.length} bytes received. Total Context: ${accumulatedPcmBytes} bytes. KV Sequence: ${sequenceCounter}.</thought>`,
-            timestampMs: Date.now(),
-          },
-        ];
+        // Receipt alone is not a model thought; inference is provided by a separate adapter.
+        return [];
       },
 
       processModelStreamChunk(rawTokenChunk: string): MeridianStreamEvent[] {
+        if (ended) throw new Error("Audio session has ended.");
         // Fast-path PII gate check on stream tokens
         MeridianEngine.filterPii(rawTokenChunk, PiiMaskMode.PII_REDACT_TOKEN);
         const { tokenMap } = anonymizePii(rawTokenChunk);
@@ -119,7 +139,11 @@ export class MeridianAudioRouter {
         // Check if stream token indicates proactive intent
         if (options.proactiveEnabled !== false) {
           const lower = rawTokenChunk.toLowerCase();
-          if (lower.includes("schedule") || lower.includes("meeting") || lower.includes("deploy")) {
+          if (
+            lower.includes("schedule") ||
+            lower.includes("meeting") ||
+            lower.includes("deploy")
+          ) {
             proactiveTriggers.push({
               id: `proact-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
               condition: "User requested scheduling or deployment activity",
@@ -133,10 +157,17 @@ export class MeridianAudioRouter {
         return parser.pushChunk(rawTokenChunk);
       },
 
-      async dispatchToolCall(toolName: string, args: Record<string, unknown>): Promise<unknown> {
+      async dispatchToolCall(
+        toolName: string,
+        args: Record<string, unknown>,
+      ): Promise<unknown> {
+        if (ended) throw new Error("Audio session has ended.");
         // Sub-millisecond PII sanitization on arguments before execution
         const serialized = JSON.stringify(args);
-        const sanitized = MeridianEngine.filterPii(serialized, PiiMaskMode.PII_MASK_ALL);
+        const sanitized = MeridianEngine.filterPii(
+          serialized,
+          PiiMaskMode.PII_MASK_ALL,
+        );
         let sanitizedParsedArgs = args;
         try {
           sanitizedParsedArgs = JSON.parse(sanitized.sanitizedText);
@@ -145,7 +176,7 @@ export class MeridianAudioRouter {
         // Record tool fact into local memory
         MeridianEngine.upsertMemory(
           `tool-history-${sessionId}-${Date.now()}`,
-          `Invoked ${toolName} with args: ${sanitized.sanitizedText}`
+          `Invoked ${toolName} with args: ${sanitized.sanitizedText}`,
         );
 
         return {
@@ -162,10 +193,12 @@ export class MeridianAudioRouter {
       },
 
       async endStream(): Promise<MeridianStreamEvent[]> {
+        if (ended) return [{ type: "done", status: "completed" }];
+        ended = true;
         // Persist session summary to local memory
         MeridianEngine.upsertMemory(
           `session-summary-${sessionId}`,
-          `Audio Session finished. Received: ${accumulatedPcmBytes} bytes across ${sequenceCounter} KV frames.`
+          `Audio Session finished. Received: ${accumulatedPcmBytes} bytes across ${sequenceCounter} PCM chunks.`,
         );
 
         return [

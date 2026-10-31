@@ -52,11 +52,11 @@ export function ConnectedBrowsers({
         <p className="text-destructive text-sm" role="alert">
           Couldn't load your connected browsers. Reload the page.
         </p>
-      ) : connections.data.connections.length === 0 ? (
+      ) : (connections.data?.connections?.length ?? 0) === 0 ? (
         <PageEmpty>No browsers connected yet.</PageEmpty>
       ) : (
         <PageRows>
-          {connections.data.connections.map((connection, index) => (
+          {(connections.data?.connections ?? []).map((connection, index) => (
             <Fragment key={connection.id}>
               {index > 0 ? <Separator /> : null}
               <ConnectedBrowserRow

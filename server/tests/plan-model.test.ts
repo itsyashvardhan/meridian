@@ -3,10 +3,98 @@ import { z } from "zod";
 import {
   PLAN_RUN_COMPLETED,
   PlanModel,
+  anonymizePlanMessages,
   planMessages,
   planModelForEnvironment,
 } from "../src/agents/plan-model";
 import { buildAgents } from "../src/copilot";
+
+test("plan prompts mask PII and restore split response tokens on egress", async () => {
+  const address = "person@example.com";
+  const server = Bun.serve({
+    port: 0,
+    fetch: async (request) => {
+      const body = await request.json();
+      const serialized = JSON.stringify(body);
+      expect(serialized).not.toContain(address);
+      const match = serialized.match(/<PII_EMAIL_\d+>/);
+      expect(match).not.toBeNull();
+      const token = match?.[0] ?? "";
+      const events = [
+        { type: "RUN_STARTED", threadId: body.threadId, runId: body.runId },
+        {
+          type: "TEXT_MESSAGE_START",
+          messageId: "pii-answer",
+          role: "assistant",
+        },
+        {
+          type: "TEXT_MESSAGE_CONTENT",
+          messageId: "pii-answer",
+          delta: `I will contact ${token.slice(0, 9)}`,
+        },
+        {
+          type: "TEXT_MESSAGE_CONTENT",
+          messageId: "pii-answer",
+          delta: `${token.slice(9)} shortly.`,
+        },
+        { type: "TEXT_MESSAGE_END", messageId: "pii-answer" },
+        { type: "RUN_FINISHED", threadId: body.threadId, runId: body.runId },
+      ];
+      return new Response(
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    },
+  });
+  try {
+    const model = new PlanModel(
+      { provider: "claude", endpoint: server.url, token: "owned" },
+      "knowledge",
+      { threadId: "channel" },
+    );
+    const result = await model.doGenerate({
+      prompt: [
+        {
+          role: "user",
+          content: [{ type: "text", text: `Please contact ${address}.` }],
+        },
+      ],
+    });
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: `I will contact ${address} shortly.`,
+    });
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("prompt anonymization is consistent across text, tool arguments, and results", () => {
+  const address = "person@example.com";
+  const { messages, tokenMap } = anonymizePlanMessages([
+    { id: "user", role: "user", content: `Use ${address}.` },
+    {
+      id: "assistant",
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "call-1",
+          type: "function",
+          function: {
+            name: "lookup",
+            arguments: JSON.stringify({ email: address }),
+          },
+        },
+      ],
+    },
+    { id: "result", role: "tool", toolCallId: "call-1", content: address },
+  ] as never);
+  const serialized = JSON.stringify(messages);
+  expect(serialized).not.toContain(address);
+  expect(Object.values(tokenMap)).toEqual([address]);
+  expect((serialized.match(/<PII_EMAIL_1>/g) ?? []).length).toBe(3);
+});
 
 test("a plan-only built-in keeps its identity and instructions", async () => {
   const requests: Record<string, unknown>[] = [];
@@ -200,13 +288,17 @@ test("the bridge refuses an unoffered native tool instead of executing it", asyn
 
 test("the original built-in executes its granted tool and sends the actual matching result", async () => {
   const requests: Record<string, unknown>[] = [];
-  const executions: string[] = [];
+  const executions: unknown[] = [];
+  const address = "finance@example.com";
   const server = Bun.serve({
     port: 0,
     fetch: async (request) => {
       const body = await request.json();
       expect(request.headers.get("x-openbot-agent-token")).toBe("owned-token");
       requests.push(body);
+      expect(JSON.stringify(body)).not.toContain(address);
+      const piiToken = JSON.stringify(body).match(/<PII_EMAIL_\d+>/)?.[0];
+      expect(piiToken).toBeDefined();
       const events =
         requests.length === 1
           ? [
@@ -218,7 +310,7 @@ test("the original built-in executes its granted tool and sends the actual match
               {
                 type: "TOOL_CALL_ARGS",
                 toolCallId: "sdk-actual-id",
-                delta: '{"query":"policy"}',
+                delta: JSON.stringify({ query: "policy", email: piiToken }),
               },
               { type: "TOOL_CALL_END", toolCallId: "sdk-actual-id" },
             ]
@@ -272,10 +364,13 @@ test("the original built-in executes its granted tool and sends the actual match
         {
           name: "knowledge_search",
           description: "Search granted knowledge",
-          parameters: z.object({ query: z.string() }),
+          parameters: z.object({
+            query: z.string(),
+            email: z.string().email(),
+          }),
           ref: { kind: "mcp", serverId: "knowledge", toolName: "search" },
           execute: async (args) => {
-            executions.push(id);
+            executions.push(args);
             return JSON.stringify({
               query: args,
               policy: 42,
@@ -286,9 +381,16 @@ test("the original built-in executes its granted tool and sends the actual match
       ],
     );
     const agent = agents.knowledge.clone();
-    agent.setMessages([{ id: "q", role: "user", content: "Find the policy." }]);
+    agent.setMessages([
+      {
+        id: "q",
+        role: "user",
+        content: `Find the policy for ${address}.`,
+      },
+    ]);
     await agent.runAgent();
-    expect(executions).toEqual(["knowledge"]);
+    expect(executions).toHaveLength(1);
+    expect(executions[0]).toMatchObject({ email: address });
     expect(requests).toHaveLength(2);
     expect(requests[0]?.threadId).toBe(requests[1]?.threadId);
     expect(requests[1]?.messages).toContainEqual(
