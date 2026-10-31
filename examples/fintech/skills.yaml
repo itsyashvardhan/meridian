@@ -232,3 +232,41 @@ skills:
       save_bot once, at the end. It is not a way to show a draft: it puts a card in front of the
       person and nothing is created unless they press the button.
     tools: []
+
+  - slug: triage-github-issues
+    title: Triage GitHub issues and PRs
+    summary: Search and analyze repositories, pull requests, and commit logs across GitHub.
+    instructions: >-
+      Use GitHub integration tools to inspect repository activity, recent commits, open pull requests,
+      and issues. Synthesize bug reports or feature requests, identify authors, label reviewers, and
+      quote commit hashes verbatim. Never merge a PR or delete a branch automatically.
+    tools:
+      - github/search_repositories
+      - github/list_issues
+      - github/get_pull_request
+      - github/list_commits
+
+  - slug: sync-slack-channel
+    title: Sync and summarize Slack conversations
+    summary: Read and summarize thread discussions or broadcast announcements to connected channels.
+    instructions: >-
+      Read thread replies and channel messages using connected Slack tools. Summarize team consensus,
+      highlight blockers, and attribute quotes to specific usernames. Check user permissions before
+      suggesting any message dispatch or notification.
+    tools:
+      - slack/get_channel_history
+      - slack/get_thread_replies
+      - slack/post_message
+
+  - slug: database-query-audit
+    title: Inspect database schema and run read-only queries
+    summary: Explore PostgreSQL tables, columns, indexes, and run safe read-only SQL queries.
+    instructions: >-
+      Audit database tables and generate explain plans for complex queries. Always query with explicit
+      limits (e.g. LIMIT 50) and never execute destructive statements (DROP, TRUNCATE, DELETE, UPDATE)
+      without explicit user confirmation and native tool approval.
+    tools:
+      - postgres/list_tables
+      - postgres/describe_table
+      - postgres/execute_read_query
+
