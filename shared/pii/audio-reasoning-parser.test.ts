@@ -50,3 +50,40 @@ test("deanonymizes masked tokens in output stream seamlessly", () => {
     "Notify alice@meridian.internal about the report completion."
   );
 });
+
+test("demultiplexes inline tool calls and cleans PII in arguments", () => {
+  const tokenMap = {
+    "<PII_EMAIL_1>": "user@example.com",
+  };
+  const parser = new AudioReasoningParser(tokenMap);
+  const streamChunks = [
+    "<thought>User asked to query ledger for customer</thought>",
+    '<tool_call name="fetch_customer_data">{"email": "<PII_EMAIL',
+    '_1>", "limit": 10}</tool_call>',
+    "Data has been fetched successfully.",
+  ];
+
+  const thoughts: string[] = [];
+  const toolCalls: { tool: string; args: string }[] = [];
+  const outputs: string[] = [];
+
+  for (const chunk of streamChunks) {
+    const events = parser.pushChunk(chunk);
+    for (const ev of events) {
+      if (ev.type === "thought_chunk") thoughts.push(ev.delta);
+      if (ev.type === "tool_call_chunk") toolCalls.push({ tool: ev.tool, args: ev.argsDelta });
+      if (ev.type === "output_chunk") outputs.push(ev.delta);
+    }
+  }
+  const flushed = parser.flush();
+  for (const ev of flushed) {
+    if (ev.type === "output_chunk") outputs.push(ev.delta);
+  }
+
+  expect(thoughts.join("")).toBe("User asked to query ledger for customer");
+  expect(toolCalls.length).toBeGreaterThanOrEqual(1);
+  expect(toolCalls[0].tool).toBe("fetch_customer_data");
+  const fullArgs = toolCalls.map((t) => t.args).join("");
+  expect(fullArgs).toContain('"email": "user@example.com"');
+  expect(outputs.join("")).toContain("Data has been fetched successfully.");
+});

@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 813.5392916666665 1519.374" width="813.5392916666665" height="1519.374" style="--bg:#18181B;--fg:#F4F4F5;--line:#71717A;--muted:#A1A1AA;--surface:#27272A;--border:#3F3F46;background:var(--bg)">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
+  text { font-family: 'Inter', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Core_Voice__PII_Subsystem" data-label="Core Voice &amp; PII Subsystem">
+  <rect x="168.4451249999999" y="752" width="513.134375" height="266.70000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="168.4451249999999" y="752" width="513.134375" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="180.4451249999999" y="766" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Core Voice &amp; PII Subsystem</text>
+</g>
+<g class="subgraph" data-id="Reasoning_Pipeline_Laya_RLCD" data-label="Reasoning Pipeline (Laya RLCD)">
+  <rect x="40" y="1078.7" width="564.7879999999999" height="400.674" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="1078.7" width="564.7879999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="1092.7" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Reasoning Pipeline (Laya RLCD)</text>
+</g>
+<g class="subgraph" data-id="Reversible_PII_Shield" data-label="Reversible PII Shield">
+  <rect x="513.5982916666666" y="40" width="259.941" height="488.20000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="513.5982916666666" y="40" width="259.941" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="525.5982916666666" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Reversible PII Shield</text>
+</g>
+<polyline class="edge" data-from="User" data-to="Gateway" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="HTTP / WebRTC" points="422.3862916666666,459.9 422.3862916666666,576.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Gateway" data-to="AudioRouter" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="422.3862916666666,613.1 422.3862916666666,637.1 289.78454166666654,637.1 289.78454166666654,661.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Gateway" data-to="LayaRouter" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="422.3862916666666,613.1 422.3862916666666,637.1 554.9880416666665,637.1 554.9880416666665,661.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AudioRouter" data-to="AudioParser" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="289.78454166666654,698 289.78454166666654,747 275.8151249999999,747 275.8151249999999,796" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AudioRouter" data-to="MeridianEngine" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="289.78454166666654,698 289.78454166666654,747 487.66662499999984,747 487.66662499999984,796" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LayaRouter" data-to="MeridianEngine" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="554.9880416666665,698 554.9880416666665,734 518.4937916666665,734 518.4937916666665,796" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MeridianEngine" data-to="RoutingDecision" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="441.42587499999985,832.9 441.42587499999985,844.9 321.2824999999999,844.9 321.2824999999999,1122.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MeridianEngine" data-to="NativeLib" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="487.6666249999999,832.9 487.6666249999999,856.9 433.2854999999999,856.9 433.2854999999999,880.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MeridianEngine" data-to="FfiFallback" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="Fallback" points="533.9073749999998,832.9 533.9073749999998,844.9 588.2884999999999,844.9 588.2884999999999,965.8" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RoutingDecision" data-to="FastRoute" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="p_direct &gt;= tau_fast" points="290.0368333333333,1278.9283333333333 290.0368333333333,1322.174 181.08549999999997,1322.174 181.08549999999997,1426.4740000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RoutingDecision" data-to="DeepRoute" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="p_deep &gt;= tau_deep or tools" points="352.5281666666666,1278.9283333333333 352.5281666666666,1322.174 461.4794999999999,1322.174 461.4794999999999,1426.4740000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PIIModule" data-to="AnonymizedPayload" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="anonymizePii" points="643.5687916666666,120.9 643.5687916666666,237.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AnonymizedPayload" data-to="Model" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="643.5687916666666,274.1 643.5687916666666,322.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Model" data-to="RestoredOutput" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="deanonymizePii" points="643.5687916666666,359 643.5687916666666,475.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="User" data-to="Gateway" data-label="HTTP / WebRTC">
+  <rect x="374.88629166666647" y="502.9000000000001" width="94.86999999999999" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="422.32129166666647" y="518.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HTTP / WebRTC</text>
+</g>
+<g class="edge-label" data-from="MeridianEngine" data-to="FfiFallback" data-label="Fallback">
+  <rect x="558.2884999999999" y="884.2" width="59.230000000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="587.9034999999999" y="899.35" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Fallback</text>
+</g>
+<g class="edge-label" data-from="RoutingDecision" data-to="FastRoute" data-label="p_direct &gt;= tau_fast">
+  <rect x="126.08549999999997" y="1353.174" width="109.12600000000003" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="180.64849999999998" y="1368.324" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">p_direct &gt;= tau_fast</text>
+</g>
+<g class="edge-label" data-from="RoutingDecision" data-to="DeepRoute" data-label="p_deep &gt;= tau_deep or tools">
+  <rect x="386.4794999999999" y="1353.174" width="149.518" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="461.23849999999993" y="1368.324" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">p_deep &gt;= tau_deep or tools</text>
+</g>
+<g class="edge-label" data-from="PIIModule" data-to="AnonymizedPayload" data-label="anonymizePii">
+  <rect x="603.0687916666666" y="163.9" width="80.61400000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="643.3757916666666" y="179.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">anonymizePii</text>
+</g>
+<g class="edge-label" data-from="Model" data-to="RestoredOutput" data-label="deanonymizePii">
+  <rect x="597.0687916666666" y="402" width="92.49400000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="643.3157916666665" y="417.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">deanonymizePii</text>
+</g>
+<g class="node" data-id="User" data-label="User / Client UI" data-shape="stadium">
+  <rect x="359.17429166666653" y="423" width="126.424" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="422.3862916666665" y="441.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">User / Client UI</text>
+</g>
+<g class="node" data-id="Gateway" data-label="Meridian Ingest &amp; Gateway" data-shape="rectangle">
+  <rect x="325.0882916666666" y="576.2" width="194.59599999999995" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="422.3862916666666" y="594.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Meridian Ingest &amp; Gateway</text>
+</g>
+<g class="node" data-id="AudioRouter" data-label="MeridianAudioRouter / audio-ingest-router.ts" data-shape="rectangle">
+  <rect x="138.39354166666664" y="661.1" width="302.78199999999987" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="289.78454166666654" y="679.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">MeridianAudioRouter / audio-ingest-router.ts</text>
+</g>
+<g class="node" data-id="LayaRouter" data-label="LayaRouter / router.ts" data-shape="rectangle">
+  <rect x="469.1755416666665" y="661.1" width="171.625" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="554.9880416666665" y="679.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">LayaRouter / router.ts</text>
+</g>
+<g class="node" data-id="AudioParser" data-label="AudioReasoningParser" data-shape="rectangle">
+  <rect x="184.4451249999999" y="796" width="182.73999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="275.8151249999999" y="814.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">AudioReasoningParser</text>
+</g>
+<g class="node" data-id="MeridianEngine" data-label="MeridianEngine Bun FFI" data-shape="rectangle">
+  <rect x="395.18512499999986" y="796" width="184.96299999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="487.66662499999984" y="814.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">MeridianEngine Bun FFI</text>
+</g>
+<g class="node" data-id="NativeLib" data-label="meridian_core (Rust cdylib)" data-shape="rectangle">
+  <rect x="332.2824999999999" y="880.9" width="202.00599999999994" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="433.2854999999999" y="899.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">meridian_core (Rust cdylib)</text>
+</g>
+<g class="node" data-id="FfiFallback" data-label="JS Regex Fallback" data-shape="rectangle">
+  <rect x="510.9974999999999" y="965.8" width="154.582" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="588.2884999999999" y="984.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">JS Regex Fallback</text>
+</g>
+<g class="node" data-id="RoutingDecision" data-label="Laya Route Decision" data-shape="diamond">
+  <polygon points="321.2824999999999,1122.7 415.0194999999999,1216.4370000000001 321.2824999999999,1310.1740000000002 227.54549999999992,1216.4370000000001" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="321.2824999999999" y="1216.4370000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Laya Route Decision</text>
+</g>
+<g class="node" data-id="FastRoute" data-label="direct_e2b: Gemma 4 E2B Fast Turn" data-shape="rectangle">
+  <rect x="56" y="1426.4740000000002" width="250.17099999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="181.08549999999997" y="1444.9240000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">direct_e2b: Gemma 4 E2B Fast Turn</text>
+</g>
+<g class="node" data-id="DeepRoute" data-label="deep_e4b: Gemma 4 E4B Deep Agent" data-shape="rectangle">
+  <rect x="334.17099999999994" y="1426.4740000000002" width="254.61699999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="461.4794999999999" y="1444.9240000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">deep_e4b: Gemma 4 E4B Deep Agent</text>
+</g>
+<g class="node" data-id="PIIModule" data-label="shared/pii/anonymizer.ts" data-shape="rectangle">
+  <rect x="549.2347916666665" y="84" width="188.66799999999995" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="643.5687916666665" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">shared/pii/anonymizer.ts</text>
+</g>
+<g class="node" data-id="AnonymizedPayload" data-label="Tokenized Prompt &amp; Token Map" data-shape="rectangle">
+  <rect x="529.5982916666666" y="237.2" width="227.94099999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="643.5687916666666" y="255.64999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Tokenized Prompt &amp; Token Map</text>
+</g>
+<g class="node" data-id="Model" data-label="Reasoning Model" data-shape="rectangle">
+  <rect x="571.4647916666665" y="322.1" width="144.20800000000003" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="643.5687916666666" y="340.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Reasoning Model</text>
+</g>
+<g class="node" data-id="RestoredOutput" data-label="Clean Restored Response" data-shape="rectangle">
+  <rect x="545.5297916666666" y="475.3" width="196.078" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="643.5687916666666" y="493.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">Clean Restored Response</text>
+</g>
+</svg>
