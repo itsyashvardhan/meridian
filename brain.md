@@ -1,165 +1,153 @@
-# Meridian: source of truth
+# Meridian product specification
 
-> **Status**: Reference document  
-> **Workspace**: Meridian  
-> **Repository root**: `C:\Users\yashv\Desktop\openflow`
-
----
-
-## 1. Overview and scope
-
-Meridian is a self-hosted local workspace and assistant environment designed to run on private infrastructure with zero external telemetry.
-
-### Core mechanisms
-- **Reversible entity masking.** Replaces sensitive strings (emails, credit card numbers, SSNs, phone numbers, API keys, IP addresses) with token identifiers before external model calls, then restores the original values on response egress.
-- **Tiered edge routing.** Routes low-latency turns to `gemma4-e2b-it` and delegates tool use or complex steps to `gemma4-e4b-it`.
-- **Sandboxed execution.** Isolates agent subprocesses with DOM and network audit logs.
-- **Tenant configurations.** Supports per-tenant parameters via configuration files like `examples/fintech/brand.yaml`.
-
-Default access URL: `http://localhost:3010`
+Workspace: Meridian  
+Repository root: `C:\Users\yashv\Desktop\openflow`  
+Default local access: `http://localhost:3010`
 
 ---
 
-## 2. Architecture and components
+## 1. Product definition
+
+Meridian is a self-hosted AI workspace and assistant platform that runs on private infrastructure. It executes browser actions, orchestrates multi-agent tasks, and streams multimodal voice sessions without sending unmasked data or telemetry to external third parties.
+
+### Core technical constraints
+- Zero telemetry egress: Client traffic stays inside private network boundaries or defined upstream endpoints.
+- Deterministic PII neutralization: Sensitive tokens are scrubbed prior to model inference and reinjected on egress.
+- Direct multimodal audio: Voice input streams without text transcript hops, reducing turnaround latency.
+- Isolated multi-agent workspaces: Coworker agents run with distinct tools, memory isolation, and audit-logged capabilities.
+
+---
+
+## 2. System architecture
 
 ```mermaid
 graph TD
-    User([User / Client UI]) -->|HTTP / WebRTC| Gateway[Meridian Ingest & Gateway]
-    Gateway --> AudioRouter[MeridianAudioRouter / audio-ingest-router.ts]
-    Gateway --> LayaRouter[LayaRouter / router.ts]
+    Client["Client Browser (Vite / React :3010)"] -->|"HTTP / SSE / WebSocket"| ReverseProxy["Vite Dev / Gateway (:3010)"]
+    ReverseProxy -->|"/api requests"| AppServer["Bun Backend Server (:3001)"]
     
-    subgraph "Core Voice & PII Subsystem"
-        AudioRouter --> AudioParser[AudioReasoningParser]
-        AudioRouter --> MeridianEngine[MeridianEngine Bun FFI]
-        LayaRouter --> MeridianEngine
-        MeridianEngine --> NativeLib["meridian_core (Rust cdylib)"]
-        MeridianEngine -.->|Fallback| FfiFallback[JS Regex Fallback]
+    subgraph "Ingest and Data Layer"
+        AppServer -->|"Postgres Driver (Pooled + SNI)"| NeonDB["Neon Serverless PostgreSQL"]
+        AppServer --> VoiceRouter["Audio Ingest Router (audio-ingest-router.ts)"]
+        AppServer --> LayaEngine["Laya RLCD Engine (router.ts)"]
     end
 
-    subgraph "Reasoning Pipeline (Laya RLCD)"
-        MeridianEngine --> RoutingDecision{Laya Route Decision}
-        RoutingDecision -->|p_direct >= tau_fast| FastRoute[direct_e2b: Gemma 4 E2B Fast Turn]
-        RoutingDecision -->|p_deep >= tau_deep or tools| DeepRoute[deep_e4b: Gemma 4 E4B Deep Agent]
+    subgraph "Native Acceleration & PII Shield"
+        LayaEngine --> FfiBridge["Meridian Engine (meridian-engine.ts)"]
+        FfiBridge --> NativeLib["meridian_core (Rust cdylib / DLL)"]
+        FfiBridge -.->|Fallback| RegexFallback["TypeScript Regex Shield"]
+        AppServer --> PiiFilter["Reversible Anonymizer (shared/pii)"]
     end
 
-    subgraph "Reversible PII Shield"
-        PIIModule[shared/pii/anonymizer.ts] -->|anonymizePii| AnonymizedPayload[Tokenized Prompt & Token Map]
-        AnonymizedPayload --> Model[Reasoning Model]
-        Model -->|deanonymizePii| RestoredOutput[Clean Restored Response]
+    subgraph "Model Dispatch Layer"
+        LayaEngine -->|"p_direct >= 0.88"| FastRoute["gemma4-e2b (Fast Conversational Turn)"]
+        LayaEngine -->|"p_deep >= 0.65 or tools"| DeepRoute["gemma4-e4b (Deep Reasoning & Tool Execution)"]
+        PiiFilter -->|"Masked Payload"| FastRoute
+        PiiFilter -->|"Masked Payload"| DeepRoute
     end
 ```
 
 ---
 
-## 3. Native engine (`meridian_core`)
+## 3. Storage and data model
 
-Source: `server/src/voice/native/`
-- **Language**: Rust (`src/lib.rs`, `Cargo.toml`)
-- **FFI specification**: `server/src/voice/native/meridian_core.h`
-- **Compiled artifacts**:
-  - Windows: `meridian_core.dll` (`libmeridian_core.dll.a`, `libmeridian_core.rlib`)
-  - Linux: `libmeridian_core.so`
-  - macOS: `libmeridian_core.dylib`
+Meridian connects to Neon PostgreSQL using connection pooling with SNI routing.
 
-### Exported C ABI functions
-1. `int meridian_engine_init(size_t worker_threads)`
-   - Spawns worker threads (`pthread` on Unix, `CreateThread` on Windows).
-   - Sets atomic running state to true.
-2. `void meridian_engine_shutdown(void)`
-   - Signals thread exit, joins threads with `WaitForSingleObject` or `pthread_join`, and deallocates the thread pool.
-3. `PiiGateResult* meridian_sanitize_pii(const char* input_text, PiiMaskMode mode)`
-   - Strips email addresses, phone numbers, SSNs, credit card numbers, and API keys with regex matches.
-   - Measures duration in nanoseconds (`processing_time_ns`).
-4. `void meridian_free_pii_result(PiiGateResult* result)`
-   - Frees allocated `PiiGateResult` memory and internal strings.
-5. `LayaDecisionResult* meridian_eval_laya_routing(const char* sanitized_transcript, double tau_fast, double tau_deep, int tool_indicators_count, double ambiguity_level)`
-   - Calculates query routing scores:
-     - Baseline score (`direct_prior`): `0.90`
-     - Word count deduction (> 30 words): `-0.15`
-     - Tool indicator deduction: `-0.35 * min(indicators, 2)`
-     - Ambiguity deduction (> 0.4): `-ambiguity * 0.4`
-     - Action keywords (`check`, `run`, `browse`, `schedule`, `execute`, `fetch`, `calculate`, `search`, `lookup`, `database`, `api`, `order`, `book`): `-0.15` per occurrence.
-   - Computes `p_direct`, `p_deep = 1.0 - p_direct`, and Brier score `(p_direct - y)^2`.
-   - Routing rules:
-     - Selects `direct_e2b` when `p_direct >= tau_fast` (default `0.88`).
-     - Selects `deep_e4b` when `p_deep >= tau_deep` (default `0.65`), `tool_indicators > 0`, or `ambiguity_level >= 0.5`.
-6. `void meridian_free_laya_result(LayaDecisionResult* result)`
-   - Frees the allocated `LayaDecisionResult` struct.
+- Database client: `postgres.js` with explicit pooler endpoint parameter (`options=endpoint%3D<endpoint-id>`).
+- Migration harness: `bun --env-file=.env server/scripts/migrate.ts`.
+- Schema coverage:
+  - Users, sessions, and authentication tokens.
+  - Organization and tenant configurations (`fintech`, enterprise policies).
+  - Conversation threads, messages, and streaming event checkpoints.
+  - Active background jobs, agent execution steps, and tool audit logs.
 
 ---
 
-## 4. Bun FFI bridge (`server/src/voice/meridian-engine.ts`)
+## 4. Reversible PII neutralization
 
-The `MeridianEngine` wrapper class:
-- Loads the `meridian_core` binary via `bun:ffi` `dlopen`.
-- Spawns four worker threads on initialization.
-- Methods:
-  - `MeridianEngine.isNative()`: Returns whether the native binary loaded.
-  - `MeridianEngine.filterPii(text, mode)`: Strips and replaces sensitive strings.
-  - `MeridianEngine.scoreLayaRouting(transcript, options)`: Evaluates routing probabilities.
-  - `MeridianEngine.shutdown()`: Frees native resources on process exit.
-- Fallback: Uses TypeScript regex patterns if the native binary is missing.
+All user text and voice prompts pass through deterministic masking before leaving private process memory.
 
----
+Source: `shared/pii/anonymizer.ts`
 
-## 5. Voice and reasoning subsystem
+### Target entities
+1. Email addresses: Matches RFC-5322 patterns; tokenized as `<EMAIL_N>`.
+2. Credit card numbers: Matches Visa, Mastercard, Amex, Discover formats; tokenized as `<CREDIT_CARD_N>`.
+3. Social Security numbers: Matches standard 9-digit formats; tokenized as `<SSN_N>`.
+4. Phone numbers: Matches international and North American numbering plans; tokenized as `<PHONE_NUMBER_N>`.
+5. IP addresses: Matches IPv4 and IPv6 string addresses; tokenized as `<IP_ADDRESS_N>`.
+6. API secrets: Matches `sk-`, `ghp_`, and `AIza` keys; tokenized as `<API_KEY_N>`.
 
-### 5.1 Direct audio ingest router (`server/src/voice/audio-ingest-router.ts`)
-- **Class**: `MeridianAudioRouter`
-- **Behavior**: Streams raw audio chunks directly into multimodal context without an intermediate speech-to-text step.
-- **Session ID format**: `meridian-audio-<timestamp>-<random_hex>`
-- **Stream events (`MeridianStreamEvent`)**:
-  - `thought_chunk`: Emits intermediate tokens to the reasoning UI.
-  - `output_chunk`: Sends final response text to the user.
-  - `tool_call_chunk`: Delivers tool calls triggered by the model.
-  - `done`: Emits on completion or stream cancellation.
-
-### 5.2 Realtime WebRTC provider (`server/src/voice/provider.ts`)
-- Manages realtime voice sessions over WebRTC.
-- Sends header: `x-meridian-engine: laya-rlcd`.
-- Payload schema:
-  - `edge_model`: `gemma4-e2b`
-  - `deep_model`: `gemma4-e4b`
-  - WebRTC transport negotiation with SDP handshake.
+### Inversion cycle
+1. Ingest: `anonymizePii(rawText, options)` extracts matched values, generates random or indexed substitute tokens, and returns `PiiTokenMap`.
+2. Reasoning: Remote or local LLM executes against anonymized prompt content.
+3. Egress: `deanonymizePii(modelOutput, tokenMap)` replaces tokens with stored sensitive strings before returning output to client.
 
 ---
 
-## 6. PII tokenization layer (`shared/pii`)
+## 5. Voice pipeline and dual-model routing
 
-Deterministic entity replacement and restoration:
-- **Entity types**:
-  - `EMAIL`
-  - `CREDIT_CARD`
-  - `SSN`
-  - `PHONE_NUMBER`
-  - `IP_ADDRESS`
-  - `API_KEY` (`sk-`, `ghp_`, `AIza`)
-- **Functions**:
-  - `anonymizePii(text, options)`: Replaces matches with `<PII_TYPE_N>` tokens and returns a `PiiTokenMap`.
-  - `deanonymizePii(text, tokenMap)`: Inverts tokens back to original values.
-  - `AudioReasoningParser`: Splits streaming tokens between `<thought>...</thought>` blocks and user text while maintaining token mappings.
+### 5.1 Direct audio ingest
+Source: `server/src/voice/audio-ingest-router.ts`
 
----
+- Eliminates intermediate speech-to-text transcription stages.
+- Emits real-time SSE stream events:
+  - `thought_chunk`: Model reasoning steps delivered to thought containers.
+  - `output_chunk`: User-facing conversational tokens.
+  - `tool_call_chunk`: Machine-readable tool payloads.
+  - `done`: Terminal event with performance metadata.
 
-## 7. Environment configuration
+### 5.2 Laya RLCD edge classifier
+Source: `server/src/voice/router.ts` and `server/src/voice/native/`
 
-| Variable | Purpose | Default |
-| :--- | :--- | :--- |
-| `VOICE_PROVIDER` | Realtime voice driver | `openflow-realtime` / `meridian-realtime` |
-| `VOICE_MODEL` | Default voice edge model | `gemma4-e2b` |
-| `VOICE_LAYA_ENDPOINT` | External classification endpoint | None (uses native library) |
-| `VOICE_TAU_FAST` | Threshold for direct conversational routing | `0.88` |
-| `VOICE_TAU_DEEP` | Threshold for deep reasoning and tool use | `0.65` |
+Routes turns between fast edge weights and deep reasoning weights based on query complexity:
+- Base prior: `0.90` direct probability.
+- Length penalty: `-0.15` for turns exceeding 30 words.
+- Tool indicators: `-0.35` per detected execution verb (`browse`, `run`, `database`, `fetch`, `execute`).
+- Routing decision gates:
+  - Fast turn (`gemma4-e2b`): `p_direct >= 0.88`.
+  - Deep turn (`gemma4-e4b`): `p_deep >= 0.65` or explicit tool indicator match.
 
 ---
 
-## 8. Test suite
+## 6. Preloaded coworker bots and capabilities
 
-Bun test commands cover Meridian modules:
-- Voice test: `bun test server/tests/meridian-voice.test.ts`
-  - PII sanitization and redacting.
-  - LayaRouter direct route dispatch (`direct_e2b`).
-  - LayaRouter deep route dispatch (`deep_e4b`).
-  - WebRTC headers (`x-meridian-engine`) and payload shape.
-- Parser test: `bun test shared/pii/audio-reasoning-parser.test.ts`
-- Multi-tenant test: `bun test tests/fintech-package.test.ts`
+Meridian supplies 10 pre-configured coworker personas tailored for technical and financial environments (`examples/fintech/agents/`):
+
+1. `lead-architect`: System design, RFC reviews, and structural database planning.
+2. `sec-auditor`: Zero-trust security audits, CVE tracking, and secret exposure scans.
+3. `data-engineer`: Neon PostgreSQL query planning, indexing, and migration pipelines.
+4. `compliance-officer`: PII leak verification, SOC2 checklists, and audit trail validation.
+5. `devops-sre`: Infrastructure monitoring, port hygiene, and container reliability.
+6. `frontend-specialist`: React, Tailwind, and TanStack Router UI optimization.
+7. `qa-automator`: Playwright test suites, regression scans, and end-to-end verification.
+8. `finance-analyst`: Financial statement modeling and quantitative reporting.
+9. `triage-bot`: GitHub issue routing, automated labeling, and pull request reviews.
+10. `onboarding-guide`: Workspace configuration, environment setup, and tool onboarding.
+
+### Integrated tool skills
+- GitHub repository management: PR creation, issue triage, branch inspection.
+- Slack team synchronization: Thread mirroring, notifications, and operational alerts.
+- Database auditing: Schema drift checks, index performance, and migration status.
+- Web automation: Playwright-driven headless browser execution.
+
+---
+
+## 7. Verification and test commands
+
+All modules require passing test suites prior to deployment:
+
+```bash
+# Validate PII masking and token inversion
+bun test shared/pii/anonymizer.test.ts
+
+# Validate streaming audio reasoning parser
+bun test shared/pii/audio-reasoning-parser.test.ts
+
+# Validate Laya engine voice routing and WebRTC headers
+bun test server/tests/meridian-voice.test.ts
+
+# Validate tenant configuration integrity
+bun test tests/fintech-package.test.ts
+
+# Apply database migrations to Neon
+bun --env-file=.env server/scripts/migrate.ts
+```
