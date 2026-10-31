@@ -228,12 +228,7 @@ const OPENBOT_HOME: Record<
         what: "Dismiss",
         tag: "button",
         box: { left: 737, top: 8, width: 24, height: 24 },
-      },
-      {
-        what: "Get a license",
-        tag: "a",
-        box: { left: 672, top: 824, width: 81, height: 20 },
-      },
+      }
     ],
   },
   desktop: {
@@ -268,12 +263,7 @@ const OPENBOT_HOME: Record<
         what: "Dismiss",
         tag: "button",
         box: { left: 737, top: 8, width: 24, height: 24 },
-      },
-      {
-        what: "Get a license",
-        tag: "a",
-        box: { left: 992, top: 1044, width: 81, height: 20 },
-      },
+      }
     ],
   },
 };
