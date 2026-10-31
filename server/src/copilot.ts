@@ -1,5 +1,5 @@
-import type { Message, RunAgentInput } from "@ag-ui/client";
-import { type AbstractAgent, HttpAgent } from "@ag-ui/client";
+import type { BaseEvent, Message, RunAgentInput } from "@ag-ui/client";
+import { AbstractAgent, HttpAgent } from "@ag-ui/client";
 import type {
   BuiltInAgentConfiguration,
   CopilotRuntimeHooks,
@@ -32,17 +32,32 @@ import { HeadlessToolsMiddleware } from "@openbot/toolkit/headless-tools";
 import { sanitizeSeededHistory } from "@openbot/toolkit/history-sanitize";
 import { executeNativeApprovalTool } from "@openbot/toolkit/native-approval";
 import { historyOrEmpty } from "@openbot/toolkit/thread-history";
-import { defer, from, switchMap } from "rxjs";
+import {
+  EMPTY,
+  defer,
+  from,
+  mergeMap,
+  of,
+  switchMap,
+  type Observable,
+} from "rxjs";
 import { z } from "zod";
+import { createPiiShieldedModel } from "./agents/configured-model";
 import {
   type ActorAgentResolver,
   CoworkerUnavailableError,
 } from "./agents/agent-resolver";
 import {
   PlanModel,
+  anonymizePlanMessages,
+  createPiiTextRestorer,
   type PlanModelConfig,
   planModelForEnvironment,
 } from "./agents/plan-model";
+import {
+  deanonymizePii,
+  type PiiTokenMap,
+} from "@openbot/shared/pii/anonymizer";
 import type { AgentActor } from "./agents/profile-types";
 import type { AuditInitiator } from "./audit";
 import {
@@ -152,6 +167,233 @@ type AgentRunInput = Parameters<AbstractAgent["run"]>[0];
 type AgentMessage = AgentRunInput["messages"][number];
 type AgentContext = NonNullable<AgentRunInput["context"]>[number];
 export type StandingRoleMessage = Extract<AgentMessage, { role: "system" }>;
+
+const PII_EVENT_STRUCTURAL_KEYS = new Set([
+  "type",
+  "role",
+  "id",
+  "messageId",
+  "toolCallId",
+  "toolCallName",
+  "toolName",
+  "threadId",
+  "runId",
+  "mimeType",
+  "mediaType",
+  "providerOptions",
+  "data",
+]);
+
+function restorePiiDeep(
+  value: unknown,
+  tokenMap: PiiTokenMap,
+  parentKey?: string,
+): unknown {
+  if (parentKey && PII_EVENT_STRUCTURAL_KEYS.has(parentKey)) return value;
+  if (typeof value === "string") return deanonymizePii(value, tokenMap);
+  if (Array.isArray(value))
+    return value.map((entry) => restorePiiDeep(entry, tokenMap));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      restorePiiDeep(entry, tokenMap, key),
+    ]),
+  );
+}
+
+function maskRemoteInput(input: RunAgentInput) {
+  const extras: Message[] = [];
+  const contextSlots: Array<{ description: number; value: number }> = [];
+  for (const [index, context] of (input.context ?? []).entries()) {
+    const description = extras.length;
+    extras.push({
+      id: `pii-context-description-${index}`,
+      role: "system",
+      content: context.description,
+    });
+    const value = extras.length;
+    extras.push({
+      id: `pii-context-value-${index}`,
+      role: "system",
+      content: context.value,
+    });
+    contextSlots.push({ description, value });
+  }
+  let stateSlot: number | undefined;
+  let stateJson: string | undefined;
+  try {
+    stateJson = JSON.stringify(input.state);
+    if (stateJson !== undefined) {
+      stateSlot = extras.length;
+      extras.push({
+        id: "pii-state",
+        role: "system",
+        content: stateJson,
+      });
+    }
+  } catch {
+    // Non-serializable state is passed through unchanged; AG-UI state is normally JSON data.
+  }
+  let resumeSlot: number | undefined;
+  let resumeJson: string | undefined;
+  try {
+    resumeJson = JSON.stringify(input.resume);
+    if (resumeJson !== undefined) {
+      resumeSlot = extras.length;
+      extras.push({
+        id: "pii-resume",
+        role: "system",
+        content: resumeJson,
+      });
+    }
+  } catch {
+    // A non-serializable resume payload is left for the AG-UI transport to validate.
+  }
+  const { messages, tokenMap } = anonymizePlanMessages([
+    ...input.messages,
+    ...extras,
+  ]);
+  const maskedExtras = messages.slice(input.messages.length);
+  const context = input.context?.map((entry, index) => {
+    const slots = contextSlots[index];
+    if (!slots) return entry;
+    return {
+      ...entry,
+      description: maskedExtras[slots.description]?.content as string,
+      value: maskedExtras[slots.value]?.content as string,
+    };
+  });
+  let state = input.state;
+  if (stateSlot !== undefined && stateJson !== undefined) {
+    try {
+      state = JSON.parse(maskedExtras[stateSlot]?.content as string);
+    } catch {
+      // A JSON string should remain parseable after text substitution; keep original on any anomaly.
+    }
+  }
+  let resume = input.resume;
+  if (resumeSlot !== undefined && resumeJson !== undefined) {
+    try {
+      resume = JSON.parse(maskedExtras[resumeSlot]?.content as string);
+    } catch {
+      // Preserve the existing resume payload if serialized prompt masking ever changes its shape.
+    }
+  }
+  return {
+    input: {
+      ...input,
+      messages: messages.slice(0, input.messages.length),
+      ...(context ? { context } : {}),
+      ...(state !== input.state ? { state } : {}),
+      ...(resume !== input.resume ? { resume } : {}),
+    },
+    tokenMap,
+  };
+}
+
+function remoteRunWithPiiShield(
+  remote: AbstractAgent,
+  input: RunAgentInput,
+): Observable<BaseEvent> {
+  const { input: masked, tokenMap } = maskRemoteInput(input);
+  const restoreText = createPiiTextRestorer(tokenMap);
+  const toolArguments = new Map<string, { event: BaseEvent; text: string }>();
+  return remote.run(masked).pipe(
+    mergeMap((event) => {
+      const row = event as BaseEvent & {
+        type: string;
+        messageId?: string;
+        toolCallId?: string;
+        delta?: string;
+      };
+      if (
+        row.type === "TEXT_MESSAGE_CONTENT" &&
+        typeof row.messageId === "string" &&
+        typeof row.delta === "string"
+      ) {
+        const delta = restoreText(row.messageId, row.delta);
+        return delta ? of({ ...event, delta } as BaseEvent) : EMPTY;
+      }
+      if (
+        row.type === "TEXT_MESSAGE_END" &&
+        typeof row.messageId === "string"
+      ) {
+        const delta = restoreText(row.messageId, "", true);
+        return from([
+          ...(delta
+            ? [
+                {
+                  type: "TEXT_MESSAGE_CONTENT",
+                  messageId: row.messageId,
+                  delta,
+                } as BaseEvent,
+              ]
+            : []),
+          restorePiiDeep(event, tokenMap) as BaseEvent,
+        ]);
+      }
+      if (
+        row.type === "TOOL_CALL_ARGS" &&
+        typeof row.toolCallId === "string" &&
+        typeof row.delta === "string"
+      ) {
+        const current = toolArguments.get(row.toolCallId);
+        toolArguments.set(row.toolCallId, {
+          event: current?.event ?? event,
+          text: (current?.text ?? "") + row.delta,
+        });
+        return EMPTY;
+      }
+      if (row.type === "TOOL_CALL_END" && typeof row.toolCallId === "string") {
+        const args = toolArguments.get(row.toolCallId);
+        toolArguments.delete(row.toolCallId);
+        return from([
+          ...(args
+            ? [
+                {
+                  ...args.event,
+                  delta: deanonymizePii(args.text, tokenMap),
+                } as BaseEvent,
+              ]
+            : []),
+          restorePiiDeep(event, tokenMap) as BaseEvent,
+        ]);
+      }
+      return of(restorePiiDeep(event, tokenMap) as BaseEvent);
+    }),
+  );
+}
+
+class PiiShieldedRemoteRun extends AbstractAgent {
+  constructor(private readonly remote: AbstractAgent) {
+    super({
+      agentId: remote.agentId,
+      description: remote.description,
+      threadId: remote.threadId,
+      initialMessages: remote.messages,
+      initialState: remote.state,
+      debug: remote.debug,
+    });
+  }
+
+  run(input: RunAgentInput): Observable<BaseEvent> {
+    return remoteRunWithPiiShield(this.remote, input);
+  }
+
+  async getCapabilities() {
+    return this.remote.getCapabilities?.() ?? {};
+  }
+
+  abortRun(): void {
+    this.remote.abortRun();
+    super.abortRun();
+  }
+
+  clone() {
+    return new PiiShieldedRemoteRun(this.remote.clone());
+  }
+}
 
 /** The durable part of a coworker: who it is and what its standing job is. */
 export type AgentStandingProfile = {
@@ -460,9 +702,12 @@ export function builtInAgentConfiguration(
       execute: (args: unknown) => learnedSkills.execute(tool.name, args),
     })) ?? []),
   ];
+  const configuredModel = planModel
+    ? planModel
+    : createPiiShieldedModel(model, apiKey!);
 
   return {
-    model: planModel ?? `${model.provider}/${model.defaultModel}`,
+    model: configuredModel,
     /*
      * The package's role, then the person's own standing instructions, then what this Bot actually
      * holds, then the computer.
@@ -496,7 +741,6 @@ export function builtInAgentConfiguration(
         : []),
       ...(learnedSkills?.catalog ? [learnedSkills.catalog] : []),
     ].join("\n\n"),
-    ...(planModel ? {} : { apiKey: apiKey ?? undefined }),
     /*
      * A run stops after one step unless told otherwise, which for a Bot with tools means it calls
      * one and never speaks: the tool executes, the result arrives, and the run ends before the model
@@ -1490,7 +1734,8 @@ function remoteAgentWithStandingRole(
           // Who the Bot is calling back as, so the audit row names it rather than "an agent".
           forwardedProps,
         };
-        if (clientTools.length === 0) return next.run(prepared);
+        const piiShieldedNext = new PiiShieldedRemoteRun(next);
+        if (clientTools.length === 0) return piiShieldedNext.run(prepared);
         return new HeadlessToolsMiddleware(
           clientTools.map((tool) => ({
             definition: {
@@ -1504,7 +1749,7 @@ function remoteAgentWithStandingRole(
             execute: (args) => tool.execute(args),
           })),
           initiator,
-        ).run(prepared, next);
+        ).run(prepared, piiShieldedNext);
       }),
     );
   };

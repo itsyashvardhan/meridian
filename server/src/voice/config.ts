@@ -30,6 +30,17 @@ export function voiceConfig(
       "VOICE_PROVIDER must be openai-realtime, xai-realtime, or openflow-realtime.",
     );
   }
+  if (provider === "openflow-realtime") {
+    return {
+      provider,
+      model: model || "gemma4-e2b",
+      apiKey: apiKey || "local-meridian",
+      voice: voice || "gemma-native",
+      layaEndpoint,
+      tauFast,
+      tauDeep,
+    };
+  }
   if (!model || !apiKey) {
     throw new Error("VOICE_MODEL and VOICE_API_KEY are required.");
   }

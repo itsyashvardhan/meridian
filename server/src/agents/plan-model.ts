@@ -168,6 +168,7 @@ export function anonymizePlanMessages(messages: Message[]): {
   messages: Message[];
   tokenMap: PiiTokenMap;
 } {
+  const sourceText = JSON.stringify(messages);
   const tokenMap: PiiTokenMap = {};
   const tokenForValue = new Map<string, string>();
   const nextByType = new Map<string, number>();
@@ -183,6 +184,11 @@ export function anonymizePlanMessages(messages: Message[]): {
         const index = (nextByType.get(type) ?? 0) + 1;
         nextByType.set(type, index);
         token = `<PII_${type}_${index}>`;
+        while (sourceText.includes(token) || tokenMap[token] !== undefined) {
+          const next = (nextByType.get(type) ?? index) + 1;
+          nextByType.set(type, next);
+          token = `<PII_${type}_${next}>`;
+        }
         tokenForValue.set(valueKey, token);
         tokenMap[token] = original;
       }
@@ -230,7 +236,7 @@ export function anonymizePlanMessages(messages: Message[]): {
   return { messages: copied, tokenMap };
 }
 
-function createTextRestorer(tokenMap: PiiTokenMap) {
+export function createPiiTextRestorer(tokenMap: PiiTokenMap) {
   const pending = new Map<string, string>();
   return (messageId: string, delta: string, flush = false) => {
     const combined = (pending.get(messageId) ?? "") + delta;
@@ -348,7 +354,7 @@ export class PlanModel implements PlanLanguageModel {
     const { messages, tokenMap } = anonymizePlanMessages(
       planMessages(options.prompt),
     );
-    const restoreText = createTextRestorer(tokenMap);
+    const restoreText = createPiiTextRestorer(tokenMap);
     const tools = (options.tools ?? []).map((tool) => {
       if (tool.type !== "function")
         throw new Error(

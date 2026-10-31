@@ -10,7 +10,7 @@ import {
   PROVENANCE_GUIDANCE,
 } from "@openbot/shared/bot-prompt";
 import { defaultModelFor } from "@openbot/shared/model-providers";
-import { EMPTY, lastValueFrom } from "rxjs";
+import { EMPTY, lastValueFrom, of } from "rxjs";
 import { z } from "zod";
 import { createActorAgentResolver } from "../src/agents/agent-resolver";
 import { MAX_INLINED_BYTES_PER_RUN } from "../src/channels/attachment-parts";
@@ -114,6 +114,157 @@ test("remote runs receive coordination tools and preserve the signed delivery sc
     });
     expect(seen[0]?.tools.map((tool) => tool.name)).toContain("ask_person");
     expect(seen[0]?.forwardedProps.openbotRun).toBe("signed-delivery");
+  } finally {
+    run.mockRestore();
+  }
+});
+
+test("remote AG-UI requests are masked and streamed transcript tokens are restored", async () => {
+  const seen: RunAgentInput[] = [];
+  const email = "private@example.com";
+  const run = spyOn(HttpAgent.prototype, "run").mockImplementation((input) => {
+    seen.push(input);
+    const serialized = JSON.stringify(input);
+    const token = serialized.match(/<PII_EMAIL_\d+>/)?.[0] ?? "";
+    return of(
+      { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
+      {
+        type: "TEXT_MESSAGE_START",
+        messageId: "remote-answer",
+        role: "assistant",
+      },
+      {
+        type: "TEXT_MESSAGE_CONTENT",
+        messageId: "remote-answer",
+        delta: `I found ${token.slice(0, 10)}`,
+      },
+      {
+        type: "TEXT_MESSAGE_CONTENT",
+        messageId: "remote-answer",
+        delta: `${token.slice(10)} in your notes.`,
+      },
+      { type: "TEXT_MESSAGE_END", messageId: "remote-answer" },
+      { type: "RUN_FINISHED", threadId: input.threadId, runId: input.runId },
+    ) as never;
+  });
+  try {
+    const agents = await buildAgents(
+      [
+        {
+          ...riskRow,
+          type: "remote_ag_ui",
+          endpoint: "https://risk.test/ag-ui",
+          standingMessage: standingRoleMessage(riskRow),
+        },
+      ],
+      { provider: "openai", defaultModel: "test" },
+      null,
+    );
+    const agent = built(agents, "risk");
+    agent.setMessages([
+      { id: "user-1", role: "user", content: `Find ${email}.` },
+    ]);
+    await agent.runAgent({
+      runId: "remote-pii-run",
+      context: [{ description: "Caller context", value: `Also use ${email}.` }],
+      state: { prior: `Previously discussed ${email}.` },
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(JSON.stringify(seen[0])).not.toContain(email);
+    expect(JSON.stringify(seen[0])).toContain("<PII_EMAIL_1>");
+    expect(agent.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: `I found ${email} in your notes.`,
+    });
+  } finally {
+    run.mockRestore();
+  }
+});
+
+test("remote model tool arguments are restored for local execution then masked on continuation", async () => {
+  const seen: RunAgentInput[] = [];
+  const executions: unknown[] = [];
+  const email = "tool-user@example.com";
+  const run = spyOn(HttpAgent.prototype, "run").mockImplementation((input) => {
+    seen.push(input);
+    const serialized = JSON.stringify(input);
+    expect(serialized).not.toContain(email);
+    const token = serialized.match(/<PII_EMAIL_\d+>/)?.[0] ?? "";
+    const common = [
+      { type: "RUN_STARTED", threadId: input.threadId, runId: input.runId },
+    ];
+    if (seen.length === 1)
+      return of(
+        ...common,
+        {
+          type: "TOOL_CALL_START",
+          toolCallId: "remote-lookup",
+          toolCallName: "lookup_email",
+        },
+        {
+          type: "TOOL_CALL_ARGS",
+          toolCallId: "remote-lookup",
+          delta: JSON.stringify({ email: token }),
+        },
+        { type: "TOOL_CALL_END", toolCallId: "remote-lookup" },
+        { type: "RUN_FINISHED", threadId: input.threadId, runId: input.runId },
+      ) as never;
+    return of(
+      ...common,
+      {
+        type: "TEXT_MESSAGE_START",
+        messageId: "tool-answer",
+        role: "assistant",
+      },
+      {
+        type: "TEXT_MESSAGE_CONTENT",
+        messageId: "tool-answer",
+        delta: `Found ${token} locally.`,
+      },
+      { type: "TEXT_MESSAGE_END", messageId: "tool-answer" },
+      { type: "RUN_FINISHED", threadId: input.threadId, runId: input.runId },
+    ) as never;
+  });
+  try {
+    const agents = await buildAgents(
+      [
+        {
+          ...riskRow,
+          type: "remote_ag_ui",
+          endpoint: "https://risk.test/ag-ui",
+          standingMessage: standingRoleMessage(riskRow),
+        },
+      ],
+      { provider: "openai", defaultModel: "test" },
+      null,
+      undefined,
+      async () => [
+        {
+          name: "lookup_email",
+          description: "Look up a contact email",
+          parameters: z.object({ email: z.string().email() }),
+          ref: { kind: "mcp", serverId: "contacts", toolName: "lookup" },
+          execute: async (args) => {
+            executions.push(args);
+            return { email };
+          },
+        },
+      ],
+    );
+    const agent = built(agents, "risk");
+    agent.setMessages([
+      { id: "user-tool", role: "user", content: `Find ${email}.` },
+    ]);
+    await agent.runAgent({ runId: "remote-tool-pii-run" });
+
+    expect(seen).toHaveLength(2);
+    expect(executions).toEqual([{ email }]);
+    expect(JSON.stringify(seen[1])).not.toContain(email);
+    expect(agent.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: `Found ${email} locally.`,
+    });
   } finally {
     run.mockRestore();
   }
@@ -307,24 +458,23 @@ describe("registered Copilot agents", () => {
   });
 
   test("configures an OpenAI built-in agent", () => {
-    expect(
-      builtInAgentConfiguration(
-        {
-          id: "general-assistant",
-          name: "General Assistant",
-          type: "built_in",
-          systemPrompt: "Be helpful.",
-        },
-        { provider: "openai", defaultModel: "gpt-5.6-terra" },
-        "openai-secret",
-      ),
-    ).toEqual({
-      model: "openai/gpt-5.6-terra",
+    const configuration = builtInAgentConfiguration(
+      {
+        id: "general-assistant",
+        name: "General Assistant",
+        type: "built_in",
+        systemPrompt: "Be helpful.",
+      },
+      { provider: "openai", defaultModel: "gpt-5.6-terra" },
+      "openai-secret",
+    );
+    expect(configuration).toMatchObject({
+      model: { modelId: "gpt-5.6-terra", specificationVersion: "v3" },
       // The provenance rule is unconditional, so even a Bot with no tools and no computer carries
       // it. That Bot needs it most: nothing it says was read anywhere.
       prompt: `Be helpful.\n\n${PROVENANCE_GUIDANCE}\n\n${UNTRUSTED_GUIDANCE}`,
-      apiKey: "openai-secret",
     });
+    expect(configuration).not.toHaveProperty("apiKey");
   });
 
   test("fails an unavailable built-in agent through the AG-UI lifecycle", async () => {

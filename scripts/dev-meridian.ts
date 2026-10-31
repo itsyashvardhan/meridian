@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { Hono } from "hono";
 import { parse } from "yaml";
+import { createMeridianRoutes } from "../server/src/meridian/routes";
 
 const SERVER_PORT = Number(process.env.SERVER_PORT || 3001);
 
@@ -100,6 +102,15 @@ function loadPrebuiltBots() {
 
 const prebuiltBots = loadPrebuiltBots();
 
+// The real Meridian catalogue and tool routes, behind a stand-in for the session guard.
+const meridianRoutes = new Hono().route(
+  "/api/meridian",
+  createMeridianRoutes(async (context, next) => {
+    context.set("actor", devUser as never);
+    await next();
+  }),
+);
+
 const server = Bun.serve({
   port: SERVER_PORT,
   fetch(req, server) {
@@ -134,6 +145,10 @@ const server = Bun.serve({
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
     };
+
+    if (url.pathname.startsWith("/api/meridian/")) {
+      return meridianRoutes.fetch(req);
+    }
 
     if (url.pathname === "/api/me") {
       return new Response(JSON.stringify({ user: devUser }), { headers });

@@ -2,6 +2,7 @@ import {
   type Icon,
   IconBolt,
   IconBox,
+  IconMicrophone,
   IconPlug,
   IconSettings,
   IconShieldLock,
@@ -25,9 +26,9 @@ import { currentUserQueryOptions } from "@/lib/auth/queries";
  * a tab, so it stays lit on both of its tabs.
  */
 export type NavigationItem = {
-  id: "bots" | "capabilities" | "connections" | "admin" | "settings";
+  id: "live" | "bots" | "capabilities" | "connections" | "admin" | "settings";
   label: string;
-  to: "/bots" | "/capabilities" | "/connections" | "/admin" | "/settings";
+  to: "/live" | "/bots" | "/capabilities" | "/connections" | "/admin" | "/settings";
   icon: Icon;
   section: "primary" | "account";
   /** Admin routes are guarded on the server; the entry is hidden from people who cannot open them. */
@@ -35,6 +36,13 @@ export type NavigationItem = {
 };
 
 export const NAVIGATION: readonly NavigationItem[] = [
+  {
+    id: "live",
+    label: "Live",
+    to: "/live",
+    icon: IconMicrophone,
+    section: "primary",
+  },
   {
     id: "bots",
     label: "Bots",

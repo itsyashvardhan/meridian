@@ -155,6 +155,7 @@ import type { UserPreferencesStore } from "./user-preferences";
 import { userPreferencesRoutes } from "./user-preferences-routes";
 import { createVoiceProvider } from "./voice/provider";
 import { createVoiceRoutes } from "./voice/routes";
+import { createMeridianRoutes } from "./meridian/routes";
 import type { VoiceSessionServices } from "./voice/session-routes";
 import {
   DIRECTORY_PATH as WEB_BOT_AUTH_DIRECTORY_PATH,
@@ -671,6 +672,7 @@ export function createApp(
         : undefined,
     ),
   );
+  app.route("/api/meridian", createMeridianRoutes(requireUser));
   app.route(
     "/api/voice",
     createVoiceRoutes(
