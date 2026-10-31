@@ -37,6 +37,20 @@ typedef struct {
   uint64_t decision_latency_ns;
 } LayaDecisionResult;
 
+typedef struct {
+  size_t total_entries;
+  size_t total_tokens;
+  size_t max_capacity_bytes;
+  size_t current_usage_bytes;
+  double hit_rate;
+} KvCacheStats;
+
+typedef struct {
+  size_t facts_count;
+  size_t memory_bytes;
+  uint64_t last_sync_ns;
+} LocalMemoryStats;
+
 /* Multi-threaded Low-level PII Gate & Decision Engine using POSIX threads */
 MERIDIAN_API int meridian_engine_init(size_t worker_threads);
 MERIDIAN_API void meridian_engine_shutdown(void);
@@ -54,6 +68,20 @@ MERIDIAN_API LayaDecisionResult* meridian_eval_laya_routing(
     double ambiguity_level
 );
 MERIDIAN_API void meridian_free_laya_result(LayaDecisionResult* result);
+
+/* KV Cache & Paged Attention Native Manager */
+MERIDIAN_API int meridian_kv_cache_init(size_t max_capacity_mb);
+MERIDIAN_API int meridian_kv_cache_put(const char* session_id, uint64_t sequence_id, const float* key_vector, const float* val_vector, size_t dim);
+MERIDIAN_API int meridian_kv_cache_get(const char* session_id, uint64_t sequence_id, float* out_key, float* out_val, size_t dim);
+MERIDIAN_API int meridian_kv_cache_evict_prefix(const char* session_id, size_t count_to_keep);
+MERIDIAN_API void meridian_kv_cache_get_stats(KvCacheStats* out_stats);
+MERIDIAN_API void meridian_kv_cache_clear(void);
+
+/* Local Memory & Fact Store */
+MERIDIAN_API int meridian_memory_upsert(const char* key, const char* content, uint8_t is_pii_sanitized);
+MERIDIAN_API const char* meridian_memory_retrieve(const char* key);
+MERIDIAN_API void meridian_memory_free_string(char* ptr);
+MERIDIAN_API void meridian_memory_get_stats(LocalMemoryStats* out_stats);
 
 #ifdef __cplusplus
 }

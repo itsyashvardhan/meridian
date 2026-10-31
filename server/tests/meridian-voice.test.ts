@@ -104,7 +104,7 @@ test("MeridianAudioRouter handles direct audio ingest, model stream demux, and t
   const audioEvents = await session.pushAudioChunk(dummyPcm);
   expect(audioEvents.length).toBe(1);
   expect(audioEvents[0].type).toBe("thought_chunk");
-  expect(audioEvents[0].delta).toContain("[Audio Frame: received 960 bytes PCM");
+  expect(audioEvents[0].delta).toContain("Direct Audio Frame: 960 bytes received");
 
   // Demux streaming model output with thoughts, tool calls, and final text
   const rawModelStream = [

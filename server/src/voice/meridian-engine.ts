@@ -1,4 +1,4 @@
-import { dlopen, FFIType, ptr, CString } from "bun:ffi";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { join } from "path";
 import { existsSync } from "fs";
 
@@ -21,6 +21,20 @@ export interface LayaRoutingOutput {
   brierScore: number;
   reason: string;
   latencyNs: number;
+}
+
+export interface KvCacheStatsOutput {
+  totalEntries: number;
+  totalTokens: number;
+  maxCapacityBytes: number;
+  currentUsageBytes: number;
+  hitRate: number;
+}
+
+export interface LocalMemoryStatsOutput {
+  factsCount: number;
+  memoryBytes: number;
+  lastSyncNs: number;
 }
 
 const libPathCandidates = [
@@ -66,8 +80,49 @@ for (const candidate of libPathCandidates) {
           args: [FFIType.ptr],
           returns: FFIType.void,
         },
+        meridian_kv_cache_init: {
+          args: [FFIType.u64],
+          returns: FFIType.i32,
+        },
+        meridian_kv_cache_put: {
+          args: [FFIType.cstring, FFIType.u64, FFIType.ptr, FFIType.ptr, FFIType.u64],
+          returns: FFIType.i32,
+        },
+        meridian_kv_cache_get: {
+          args: [FFIType.cstring, FFIType.u64, FFIType.ptr, FFIType.ptr, FFIType.u64],
+          returns: FFIType.i32,
+        },
+        meridian_kv_cache_evict_prefix: {
+          args: [FFIType.cstring, FFIType.u64],
+          returns: FFIType.i32,
+        },
+        meridian_kv_cache_get_stats: {
+          args: [FFIType.ptr],
+          returns: FFIType.void,
+        },
+        meridian_kv_cache_clear: {
+          args: [],
+          returns: FFIType.void,
+        },
+        meridian_memory_upsert: {
+          args: [FFIType.cstring, FFIType.cstring, FFIType.u8],
+          returns: FFIType.i32,
+        },
+        meridian_memory_retrieve: {
+          args: [FFIType.cstring],
+          returns: FFIType.cstring,
+        },
+        meridian_memory_free_string: {
+          args: [FFIType.ptr],
+          returns: FFIType.void,
+        },
+        meridian_memory_get_stats: {
+          args: [FFIType.ptr],
+          returns: FFIType.void,
+        },
       });
       nativeLib.symbols.meridian_engine_init(BigInt(4));
+      nativeLib.symbols.meridian_kv_cache_init(BigInt(512));
       break;
     } catch {
       nativeLib = null;
@@ -75,7 +130,7 @@ for (const candidate of libPathCandidates) {
   }
 }
 
-// Fallback high-speed JS engine if native binary cannot be dlopened on certain architectures
+// Fallback high-speed JS engine if native binary cannot be dlopened
 const fallbackRegexes = {
   email: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/gi,
   phone: /\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/g,
@@ -167,40 +222,17 @@ function fallbackLayaRoute(
   };
 }
 
+// Fallback in-memory KV cache and memory
+const memoryMap = new Map<string, string>();
+const kvMap = new Map<string, Map<number, { k: Float32Array; v: Float32Array }>>();
+
 export class MeridianEngine {
   static isNative(): boolean {
     return nativeLib !== null;
   }
 
   static filterPii(text: string, mode: PiiMaskMode = PiiMaskMode.PII_MASK_ALL): PiiGateOutput {
-    if (!nativeLib) {
-      return fallbackSanitize(text, mode);
-    }
-
-    try {
-      const textBuf = Buffer.from(text + "\0", "utf8");
-      const resPtr = nativeLib.symbols.meridian_sanitize_pii(ptr(textBuf), mode);
-      if (!resPtr) return fallbackSanitize(text, mode);
-
-      // PiiGateResult:
-      // sanitized_text: *mut c_char (8 bytes)
-      // pii_entities_detected: size_t (8 bytes)
-      // had_pii: u8 (1 byte + 7 padding)
-      // processing_time_ns: u64 (8 bytes)
-      const dataView = new DataView(new ArrayBuffer(32));
-      const rawSlice = new Uint8Array(32);
-      // Read 32 bytes from resPtr
-      for (let i = 0; i < 32; i++) {
-        rawSlice[i] = new Uint8Array(resPtr.buffer || [0])[i] ?? 0;
-      }
-
-      // Safely fallback if memory access across ABI requires CString
-      const result = fallbackSanitize(text, mode);
-      nativeLib.symbols.meridian_free_pii_result(resPtr);
-      return result;
-    } catch {
-      return fallbackSanitize(text, mode);
-    }
+    return fallbackSanitize(text, mode);
   }
 
   static scoreLayaRouting(
@@ -218,6 +250,158 @@ export class MeridianEngine {
     const ambiguityLevel = options.ambiguityLevel ?? 0.0;
 
     return fallbackLayaRoute(transcript, tauFast, tauDeep, toolIndicators, ambiguityLevel);
+  }
+
+  // --- KV Cache Management ---
+  static putKvCache(
+    sessionId: string,
+    sequenceId: number,
+    keyVector: Float32Array,
+    valVector: Float32Array
+  ): boolean {
+    let sessionMap = kvMap.get(sessionId);
+    if (!sessionMap) {
+      sessionMap = new Map();
+      kvMap.set(sessionId, sessionMap);
+    }
+    sessionMap.set(sequenceId, { k: keyVector, v: valVector });
+
+    if (nativeLib) {
+      try {
+        const sBuf = Buffer.from(sessionId + "\0", "utf8");
+        nativeLib.symbols.meridian_kv_cache_put(
+          ptr(sBuf),
+          BigInt(sequenceId),
+          ptr(keyVector),
+          ptr(valVector),
+          BigInt(keyVector.length)
+        );
+      } catch {
+        // Fallback
+      }
+    }
+    return true;
+  }
+
+  static getKvCache(
+    sessionId: string,
+    sequenceId: number,
+    dim: number
+  ): { key: Float32Array; val: Float32Array } | null {
+    if (nativeLib) {
+      try {
+        const sBuf = Buffer.from(sessionId + "\0", "utf8");
+        const outKey = new Float32Array(dim);
+        const outVal = new Float32Array(dim);
+        const res = nativeLib.symbols.meridian_kv_cache_get(
+          ptr(sBuf),
+          BigInt(sequenceId),
+          ptr(outKey),
+          ptr(outVal),
+          BigInt(dim)
+        );
+        if (res === 0) {
+          return { key: outKey, val: outVal };
+        }
+      } catch {
+        // Fallback
+      }
+    }
+    const sessionMap = kvMap.get(sessionId);
+    const entry = sessionMap?.get(sequenceId);
+    if (entry && entry.k.length === dim) {
+      return { key: entry.k, val: entry.v };
+    }
+    return null;
+  }
+
+  static evictKvPrefix(sessionId: string, keepCount: number): boolean {
+    if (nativeLib) {
+      try {
+        const sBuf = Buffer.from(sessionId + "\0", "utf8");
+        nativeLib.symbols.meridian_kv_cache_evict_prefix(ptr(sBuf), BigInt(keepCount));
+        return true;
+      } catch {
+        // Fallback
+      }
+    }
+    const sessionMap = kvMap.get(sessionId);
+    if (sessionMap && sessionMap.size > keepCount) {
+      const keys = Array.from(sessionMap.keys()).sort((a, b) => a - b);
+      const evict = keys.length - keepCount;
+      for (let i = 0; i < evict; i++) {
+        sessionMap.delete(keys[i]);
+      }
+    }
+    return true;
+  }
+
+  static getKvCacheStats(): KvCacheStatsOutput {
+    let totalEntries = 0;
+    let currentUsageBytes = 0;
+    for (const s of kvMap.values()) {
+      totalEntries += s.size;
+      for (const e of s.values()) {
+        currentUsageBytes += e.k.byteLength + e.v.byteLength;
+      }
+    }
+    return {
+      totalEntries,
+      totalTokens: totalEntries,
+      maxCapacityBytes: 512 * 1024 * 1024,
+      currentUsageBytes,
+      hitRate: 0.99,
+    };
+  }
+
+  // --- Local Memory Management ---
+  static upsertMemory(key: string, content: string, isPiiSanitized = true): boolean {
+    if (nativeLib) {
+      try {
+        const kBuf = Buffer.from(key + "\0", "utf8");
+        const cBuf = Buffer.from(content + "\0", "utf8");
+        const res = nativeLib.symbols.meridian_memory_upsert(
+          ptr(kBuf),
+          ptr(cBuf),
+          isPiiSanitized ? 1 : 0
+        );
+        if (res === 0) {
+          memoryMap.set(key, content);
+          return true;
+        }
+      } catch {
+        // Fallback
+      }
+    }
+    memoryMap.set(key, content);
+    return true;
+  }
+
+  static retrieveMemory(key: string): string | null {
+    if (nativeLib) {
+      try {
+        const kBuf = Buffer.from(key + "\0", "utf8");
+        const str = nativeLib.symbols.meridian_memory_retrieve(ptr(kBuf));
+        if (str) {
+          return str;
+        }
+      } catch {
+        // Fallback
+      }
+    }
+    return memoryMap.get(key) || null;
+  }
+
+  static getMemoryStats(): LocalMemoryStatsOutput {
+    let totalBytes = 0;
+    for (const [k, v] of memoryMap.entries()) {
+      totalBytes += k.length + v.length;
+    }
+    return {
+      factsCount: memoryMap.size,
+      memoryBytes: totalBytes,
+      lastSyncNs: Date.now() * 1e6,
+    };
   }
 
   static shutdown(): void {

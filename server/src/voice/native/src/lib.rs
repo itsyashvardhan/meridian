@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int, c_void};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::os::raw::{c_char, c_float, c_int, c_void};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use regex::Regex;
 use lazy_static::lazy_static;
@@ -31,6 +32,22 @@ pub struct LayaDecisionResult {
     pub decision_latency_ns: u64,
 }
 
+#[repr(C)]
+pub struct KvCacheStats {
+    pub total_entries: libc::size_t,
+    pub total_tokens: libc::size_t,
+    pub max_capacity_bytes: libc::size_t,
+    pub current_usage_bytes: libc::size_t,
+    pub hit_rate: f64,
+}
+
+#[repr(C)]
+pub struct LocalMemoryStats {
+    pub facts_count: libc::size_t,
+    pub memory_bytes: libc::size_t,
+    pub last_sync_ns: u64,
+}
+
 #[cfg(unix)]
 type RawThreadHandle = libc::pthread_t;
 
@@ -47,12 +64,70 @@ unsafe impl Sync for EnginePool {}
 
 static mut ENGINE_POOL: Option<Arc<Mutex<EnginePool>>> = None;
 
+// --- KV Cache Implementation ---
+#[derive(Clone)]
+struct KvEntry {
+    sequence_id: u64,
+    key: Vec<f32>,
+    val: Vec<f32>,
+    dim: usize,
+    created_at: Instant,
+}
+
+struct KvSessionCache {
+    entries: HashMap<u64, KvEntry>,
+}
+
+struct GlobalKvManager {
+    sessions: RwLock<HashMap<String, KvSessionCache>>,
+    max_capacity_bytes: usize,
+    hits: AtomicUsize,
+    misses: AtomicUsize,
+}
+
+impl GlobalKvManager {
+    fn new(max_capacity_mb: usize) -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+            max_capacity_bytes: max_capacity_mb * 1024 * 1024,
+            hits: AtomicUsize::new(0),
+            misses: AtomicUsize::new(0),
+        }
+    }
+}
+
+// --- Local Memory Implementation ---
+#[derive(Clone)]
+struct MemoryFact {
+    key: String,
+    content: String,
+    is_pii_sanitized: bool,
+    timestamp: Instant,
+}
+
+struct GlobalMemoryStore {
+    facts: RwLock<HashMap<String, MemoryFact>>,
+    last_sync: AtomicU64,
+}
+
+impl GlobalMemoryStore {
+    fn new() -> Self {
+        Self {
+            facts: RwLock::new(HashMap::new()),
+            last_sync: AtomicU64::new(0),
+        }
+    }
+}
+
 lazy_static! {
     static ref RE_EMAIL: Regex = Regex::new(r"(?i)\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b").unwrap();
     static ref RE_PHONE: Regex = Regex::new(r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap();
     static ref RE_SSN: Regex = Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap();
     static ref RE_CREDIT_CARD: Regex = Regex::new(r"\b(?:\d{4}[-\s]?){3}\d{4}\b").unwrap();
     static ref RE_API_KEY: Regex = Regex::new(r"(?i)\b(?:api[_-]?key|secret|token|bearer|password)[=:\s]+[A-Za-z0-9_\-]{8,}\b").unwrap();
+    
+    static ref KV_MANAGER: GlobalKvManager = GlobalKvManager::new(512); // Default 512 MB
+    static ref LOCAL_MEMORY: GlobalMemoryStore = GlobalMemoryStore::new();
 }
 
 #[cfg(unix)]
@@ -358,5 +433,241 @@ pub unsafe extern "C" fn meridian_eval_laya_routing(
 pub unsafe extern "C" fn meridian_free_laya_result(result: *mut LayaDecisionResult) {
     if !result.is_null() {
         let _ = Box::from_raw(result);
+    }
+}
+
+// --- KV Cache C ABI Exports ---
+#[no_mangle]
+pub unsafe extern "C" fn meridian_kv_cache_init(_max_capacity_mb: libc::size_t) -> c_int {
+    // Clear existing KV cache
+    if let Ok(mut sessions) = KV_MANAGER.sessions.write() {
+        sessions.clear();
+    }
+    KV_MANAGER.hits.store(0, Ordering::SeqCst);
+    KV_MANAGER.misses.store(0, Ordering::SeqCst);
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn meridian_kv_cache_put(
+    session_id: *const c_char,
+    sequence_id: u64,
+    key_vector: *const c_float,
+    val_vector: *const c_float,
+    dim: libc::size_t,
+) -> c_int {
+    if session_id.is_null() || key_vector.is_null() || val_vector.is_null() || dim == 0 {
+        return -1;
+    }
+    let s_id = match CStr::from_ptr(session_id).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return -1,
+    };
+
+    let k_slice = std::slice::from_raw_parts(key_vector, dim);
+    let v_slice = std::slice::from_raw_parts(val_vector, dim);
+
+    let entry = KvEntry {
+        sequence_id,
+        key: k_slice.to_vec(),
+        val: v_slice.to_vec(),
+        dim,
+        created_at: Instant::now(),
+    };
+
+    if let Ok(mut sessions) = KV_MANAGER.sessions.write() {
+        let session_cache = sessions.entry(s_id).or_insert_with(|| KvSessionCache {
+            entries: HashMap::new(),
+        });
+        session_cache.entries.insert(sequence_id, entry);
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn meridian_kv_cache_get(
+    session_id: *const c_char,
+    sequence_id: u64,
+    out_key: *mut c_float,
+    out_val: *mut c_float,
+    dim: libc::size_t,
+) -> c_int {
+    if session_id.is_null() || out_key.is_null() || out_val.is_null() || dim == 0 {
+        return -1;
+    }
+    let s_id = match CStr::from_ptr(session_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    if let Ok(sessions) = KV_MANAGER.sessions.read() {
+        if let Some(session_cache) = sessions.get(s_id) {
+            if let Some(entry) = session_cache.entries.get(&sequence_id) {
+                if entry.dim == dim {
+                    let k_dst = std::slice::from_raw_parts_mut(out_key, dim);
+                    let v_dst = std::slice::from_raw_parts_mut(out_val, dim);
+                    k_dst.copy_from_slice(&entry.key);
+                    v_dst.copy_from_slice(&entry.val);
+                    KV_MANAGER.hits.fetch_add(1, Ordering::Relaxed);
+                    return 0;
+                }
+            }
+        }
+    }
+    KV_MANAGER.misses.fetch_add(1, Ordering::Relaxed);
+    -1
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn meridian_kv_cache_evict_prefix(
+    session_id: *const c_char,
+    count_to_keep: libc::size_t,
+) -> c_int {
+    if session_id.is_null() {
+        return -1;
+    }
+    let s_id = match CStr::from_ptr(session_id).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+
+    if let Ok(mut sessions) = KV_MANAGER.sessions.write() {
+        if let Some(session_cache) = sessions.get_mut(s_id) {
+            if session_cache.entries.len() > count_to_keep {
+                let mut seq_ids: Vec<u64> = session_cache.entries.keys().cloned().collect();
+                seq_ids.sort();
+                let evict_count = seq_ids.len() - count_to_keep;
+                for id in seq_ids.iter().take(evict_count) {
+                    session_cache.entries.remove(id);
+                }
+            }
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn meridian_kv_cache_get_stats(out_stats: *mut KvCacheStats) {
+    if out_stats.is_null() {
+        return;
+    }
+    let mut total_entries = 0;
+    let mut total_bytes = 0;
+
+    if let Ok(sessions) = KV_MANAGER.sessions.read() {
+        for s in sessions.values() {
+            total_entries += s.entries.len();
+            for e in s.entries.values() {
+                total_bytes += e.dim * std::mem::size_of::<f32>() * 2;
+            }
+        }
+    }
+
+    let hits = KV_MANAGER.hits.load(Ordering::Relaxed);
+    let misses = KV_MANAGER.misses.load(Ordering::Relaxed);
+    let total_reqs = hits + misses;
+    let hit_rate = if total_reqs > 0 {
+        hits as f64 / total_reqs as f64
+    } else {
+        1.0
+    };
+
+    unsafe {
+        (*out_stats).total_entries = total_entries;
+        (*out_stats).total_tokens = total_entries;
+        (*out_stats).max_capacity_bytes = KV_MANAGER.max_capacity_bytes;
+        (*out_stats).current_usage_bytes = total_bytes;
+        (*out_stats).hit_rate = hit_rate;
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn meridian_kv_cache_clear() {
+    if let Ok(mut sessions) = KV_MANAGER.sessions.write() {
+        sessions.clear();
+    }
+    KV_MANAGER.hits.store(0, Ordering::SeqCst);
+    KV_MANAGER.misses.store(0, Ordering::SeqCst);
+}
+
+// --- Local Memory C ABI Exports ---
+#[no_mangle]
+pub unsafe extern "C" fn meridian_memory_upsert(
+    key: *const c_char,
+    content: *const c_char,
+    is_pii_sanitized: u8,
+) -> c_int {
+    if key.is_null() || content.is_null() {
+        return -1;
+    }
+    let k = match CStr::from_ptr(key).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return -1,
+    };
+    let c = match CStr::from_ptr(content).to_str() {
+        Ok(s) => s.to_string(),
+        Err(_) => return -1,
+    };
+
+    let fact = MemoryFact {
+        key: k.clone(),
+        content: c,
+        is_pii_sanitized: is_pii_sanitized != 0,
+        timestamp: Instant::now(),
+    };
+
+    if let Ok(mut facts) = LOCAL_MEMORY.facts.write() {
+        facts.insert(k, fact);
+        LOCAL_MEMORY.last_sync.store(Instant::now().elapsed().as_nanos() as u64, Ordering::SeqCst);
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn meridian_memory_retrieve(key: *const c_char) -> *const c_char {
+    if key.is_null() {
+        return std::ptr::null();
+    }
+    let k = match CStr::from_ptr(key).to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null(),
+    };
+
+    if let Ok(facts) = LOCAL_MEMORY.facts.read() {
+        if let Some(fact) = facts.get(k) {
+            if let Ok(c_str) = CString::new(fact.content.clone()) {
+                return c_str.into_raw();
+            }
+        }
+    }
+    std::ptr::null()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn meridian_memory_free_string(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        let _ = unsafe { CString::from_raw(ptr) };
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn meridian_memory_get_stats(out_stats: *mut LocalMemoryStats) {
+    if out_stats.is_null() {
+        return;
+    }
+    let mut count = 0;
+    let mut total_bytes = 0;
+
+    if let Ok(facts) = LOCAL_MEMORY.facts.read() {
+        count = facts.len();
+        for (k, f) in facts.iter() {
+            total_bytes += k.len() + f.content.len();
+        }
+    }
+
+    unsafe {
+        (*out_stats).facts_count = count;
+        (*out_stats).memory_bytes = total_bytes;
+        (*out_stats).last_sync_ns = LOCAL_MEMORY.last_sync.load(Ordering::Relaxed);
     }
 }
