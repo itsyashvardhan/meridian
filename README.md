@@ -2,11 +2,11 @@
 
 # Meridian
 
-**PII-safe local workspace for everyone.**
+**PII-safe local workspace for self-hosted teams.**
 
-An enterprise-grade, privacy-first local workspace and AI assistant environment running entirely on your infrastructure. Meridian strips and tokenizes PII reversibly before sending queries to reasoning models, keeping data within your compliance boundaries while providing full agent orchestration.
+A local workspace and assistant environment that runs entirely on your infrastructure. Meridian strips and tokenizes sensitive data before queries reach external models, then restores the original values when responses return.
 
-[**Quick Start**](#quick-start) · [**Architecture**](#architecture) · [**PII Shield**](#pii-shield) · [**Configuration**](docs/configuration.md)
+[**Quick start**](#quick-start) · [**Architecture**](docs/architecture.md) · [**PII shield**](#pii-shield) · [**Configuration**](docs/configuration.md)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Status: Production Ready](https://img.shields.io/badge/status-active-green.svg)
@@ -15,22 +15,22 @@ An enterprise-grade, privacy-first local workspace and AI assistant environment 
 
 ---
 
-## What is Meridian?
+## What Meridian does
 
-Meridian provides a secure, self-hosted workspace with built-in multi-agent orchestration and an agnostic PII layer. Every coworker, agent, and tool runs with least-privilege boundary access, persistent sandboxes, and zero external telemetry leakage.
+Meridian runs agents, tools, and background tasks on private infrastructure without telemetry.
 
-- **PII-Safe Middleware**: Automatically redacts and tokenizes sensitive entities (SSNs, API keys, card numbers, emails, phone numbers) before model ingress, reversibly restoring them on output.
-- **Local-First & Edge Reasoning**: Seamlessly powered by `gemma4-e2b-it` alongside custom OpenAI-, Anthropic-, and Google-compatible endpoints.
-- **Isolated Execution & Real Browsers**: Every coworker operates inside designated containers with audit logging for every DOM and network action.
-- **Customizable Experience**: Supports multiple interface frames and themes while preserving core enterprise controls and brand configurations.
+- **Reversible tokenization.** Replaces SSNs, API keys, card numbers, emails, and phone numbers with tokens before model ingress, then restores the original text on egress.
+- **Local edge models.** Routes fast conversational turns to `gemma4-e2b-it` and passes complex tasks to local or remote endpoints.
+- **Sandboxed execution.** Agents run inside isolated containers with audit logs for DOM interactions and network requests.
+- **Configurable themes.** Supports custom brand definitions via configuration files without code changes.
 
 ---
 
-## Quick Start
+## Quick start
 
 ### 1. Requirements
-- [Bun](https://bun.sh/) (v1.2+) or Node.js (v20+)
-- PostgreSQL (or embedded container mode)
+- Bun 1.2+ or Node.js 20+
+- PostgreSQL or embedded container mode
 
 ### 2. Setup
 
@@ -48,13 +48,13 @@ bun run generate:app-config
 bun run dev
 ```
 
-The Meridian workspace is accessible by default at [http://localhost:3010](http://localhost:3010).
+The workspace listens at [http://localhost:3010](http://localhost:3010).
 
 ---
 
-## PII Shield
+## PII shield
 
-Meridian ships with an agnostic PII layer in `shared/pii` providing zero-latency deterministic tokenization:
+Meridian includes deterministic entity masking in `shared/pii`:
 
 ```typescript
 import { anonymizePii, deanonymizePii } from "@openbot/shared/pii/anonymizer";
@@ -71,7 +71,7 @@ const output = deanonymizePii(llmResponse, tokenMap);
 
 ---
 
-## Development & Testing
+## Development and testing
 
 ```sh
 bun run format:check

@@ -146,7 +146,7 @@ function ContainerSetup({
   );
 }
 
-export function LearningPage() {
+function LearningPage() {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery(learningSettingsQueryOptions());
   const automatic = useQuery(learningAutomaticQueryOptions());

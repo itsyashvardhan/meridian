@@ -1,0 +1,24 @@
+graph TD
+    User([User / Client UI]) -->|HTTP / WebRTC| Gateway[Meridian Ingest & Gateway]
+    Gateway --> AudioRouter[MeridianAudioRouter / audio-ingest-router.ts]
+    Gateway --> LayaRouter[LayaRouter / router.ts]
+    
+    subgraph "Core Voice & PII Subsystem"
+        AudioRouter --> AudioParser[AudioReasoningParser]
+        AudioRouter --> MeridianEngine[MeridianEngine Bun FFI]
+        LayaRouter --> MeridianEngine
+        MeridianEngine --> NativeLib["meridian_core (Rust cdylib)"]
+        MeridianEngine -.->|Fallback| FfiFallback[JS Regex Fallback]
+    end
+
+    subgraph "Reasoning Pipeline (Laya RLCD)"
+        MeridianEngine --> RoutingDecision{Laya Route Decision}
+        RoutingDecision -->|p_direct >= tau_fast| FastRoute[direct_e2b: Gemma 4 E2B Fast Turn]
+        RoutingDecision -->|p_deep >= tau_deep or tools| DeepRoute[deep_e4b: Gemma 4 E4B Deep Agent]
+    end
+
+    subgraph "Reversible PII Shield"
+        PIIModule[shared/pii/anonymizer.ts] -->|anonymizePii| AnonymizedPayload[Tokenized Prompt & Token Map]
+        AnonymizedPayload --> Model[Reasoning Model]
+        Model -->|deanonymizePii| RestoredOutput[Clean Restored Response]
+    end
