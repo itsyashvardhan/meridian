@@ -98,5 +98,5 @@ test("openflow-realtime provider initiates WebRTC connection with duplex dispatc
   expect(capturedHeaders["x-meridian-engine"]).toBe("laya-rlcd");
   expect(capturedBody.edge_model).toBe("gemma4-e2b");
   expect(capturedBody.deep_model).toBe("gemma4-e4b");
-  expect(capturedBody.audio.turn_detection.barge_in).toBe(true);
+  expect(capturedBody.audio?.input?.turn_detection?.barge_in).toBe(true);
 });
